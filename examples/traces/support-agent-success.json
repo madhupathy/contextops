@@ -1,0 +1,82 @@
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "run_id": "run-support-001",
+  "user": {
+    "id": "u-456",
+    "role": "customer",
+    "groups": ["external"]
+  },
+  "agent": {
+    "id": "support-agent",
+    "version": "v2.1"
+  },
+  "input": {
+    "query": "How do I reset my password?"
+  },
+  "retrieval": {
+    "candidates": [
+      {
+        "doc_id": "doc-password-reset",
+        "title": "Password Reset Guide",
+        "score": 0.95,
+        "acl_passed": true,
+        "selected": true
+      },
+      {
+        "doc_id": "doc-account-security",
+        "title": "Account Security FAQ",
+        "score": 0.82,
+        "acl_passed": true,
+        "selected": true
+      },
+      {
+        "doc_id": "doc-admin-password",
+        "title": "Admin Password Management",
+        "score": 0.71,
+        "acl_passed": false,
+        "acl_reason": "role_mismatch",
+        "selected": false
+      }
+    ],
+    "selected": ["doc-password-reset", "doc-account-security"]
+  },
+  "memory": {
+    "candidates": [],
+    "selected": []
+  },
+  "permissions": {
+    "acl_filters": [
+      {
+        "doc_id": "doc-admin-password",
+        "result": "filtered",
+        "reason": "role_mismatch"
+      }
+    ]
+  },
+  "tools": [
+    {
+      "name": "search_knowledge_base",
+      "args": {"query": "password reset", "category": "account"},
+      "status": "success",
+      "latency_ms": 95
+    }
+  ],
+  "reasoning_steps": [
+    {"step": 1, "type": "think", "content": "User needs password reset instructions"},
+    {"step": 2, "type": "retrieve", "content": "Searching knowledge base for password reset docs"},
+    {"step": 3, "type": "generate", "content": "Composing step-by-step instructions"}
+  ],
+  "output": {
+    "final_answer": "To reset your password:\n1. Go to the login page\n2. Click 'Forgot Password'\n3. Enter your email address\n4. Check your email for a reset link\n5. Click the link and set a new password\n\nThe reset link expires in 24 hours. If you don't receive the email, check your spam folder.",
+    "citations": ["doc-password-reset"]
+  },
+  "expected_answer": "Go to login page, click Forgot Password, enter email, follow the reset link.",
+  "expected_sources": ["doc-password-reset"],
+  "metrics": {
+    "latency_ms": 920,
+    "prompt_tokens": 1200,
+    "completion_tokens": 180,
+    "total_tokens": 1380,
+    "estimated_cost": 0.018
+  }
+}

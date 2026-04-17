@@ -1,0 +1,16 @@
+apiVersion: v2
+name: contextops
+description: ContextOps - AI agent evaluation, debugging, and regression testing platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ai
+  - agents
+  - evaluation
+  - rag
+  - debugging
+  - observability
+maintainers:
+  - name: ContextOps
+    url: https://github.com/contextops/contextops

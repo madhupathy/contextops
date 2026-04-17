@@ -1,0 +1,20 @@
+{
+  "name": "latest-policy-retrieval",
+  "description": "Tests whether the system retrieves the most recent policy document",
+  "query": "What is the current PTO policy?",
+  "simulate_user_roles": ["employee"],
+  "simulate_user_groups": ["engineering"],
+  "expected_answer": "The 2025 PTO policy allows 20 days of paid time off per year.",
+  "expected_sources": ["doc-pto-2025"],
+  "forbidden_sources": [],
+  "pass_criteria": {
+    "correctness": 0.85,
+    "retrieval_recall": 0.80,
+    "groundedness": 0.90
+  },
+  "seed_documents": [
+    {"doc_id": "doc-pto-2025", "title": "PTO Policy 2025", "content": "20 days PTO, unlimited carry-over", "acl": ["employee"]},
+    {"doc_id": "doc-pto-2024", "title": "PTO Policy 2024", "content": "15 days PTO, 5 day carry-over", "acl": ["employee"]},
+    {"doc_id": "doc-exec-pto", "title": "Executive PTO", "content": "Unlimited PTO for VP+", "acl": ["executive"]}
+  ]
+}

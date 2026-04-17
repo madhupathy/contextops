@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: contextops-initdb
+  labels:
+    {{- include "contextops.labels" . | nindent 4 }}
+data:
+  01-init.sql: |
+{{ .Files.Get "files/init.sql" | indent 4 }}

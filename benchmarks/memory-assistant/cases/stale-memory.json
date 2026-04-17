@@ -1,0 +1,16 @@
+{
+  "name": "stale-memory-suppression",
+  "description": "Tests whether the system correctly identifies and suppresses stale memory",
+  "query": "What is my preferred meeting time?",
+  "simulate_user_roles": ["employee"],
+  "expected_answer": "Your preferred meeting time is 2pm, based on your recent calendar update.",
+  "pass_criteria": {
+    "memory_relevance": 0.85,
+    "memory_staleness": 1.00,
+    "correctness": 0.80
+  },
+  "seed_memories": [
+    {"memory_id": "mem-old-pref", "type": "preference", "content": "User prefers 10am meetings", "created_at": "2024-01-15T00:00:00Z", "is_stale": true},
+    {"memory_id": "mem-new-pref", "type": "preference", "content": "User changed preferred meeting time to 2pm", "created_at": "2025-03-01T00:00:00Z", "is_stale": false}
+  ]
+}

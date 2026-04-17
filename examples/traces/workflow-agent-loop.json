@@ -1,0 +1,115 @@
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "run_id": "run-workflow-001",
+  "user": {
+    "id": "u-789",
+    "role": "manager",
+    "groups": ["management", "hr"]
+  },
+  "agent": {
+    "id": "contract-reviewer",
+    "version": "v2.0"
+  },
+  "input": {
+    "query": "Review the NDA with Acme Corp and flag any non-standard clauses"
+  },
+  "retrieval": {
+    "candidates": [
+      {
+        "doc_id": "doc-nda-acme",
+        "title": "NDA - Acme Corp Draft v3",
+        "score": 0.97,
+        "acl_passed": true,
+        "selected": true
+      },
+      {
+        "doc_id": "doc-nda-template",
+        "title": "Standard NDA Template",
+        "score": 0.91,
+        "acl_passed": true,
+        "selected": true
+      }
+    ],
+    "selected": ["doc-nda-acme", "doc-nda-template"]
+  },
+  "memory": {
+    "candidates": [
+      {
+        "memory_id": "mem-10",
+        "type": "semantic",
+        "summary": "Previous NDA reviews flagged indemnity clauses",
+        "content": "In 3 prior NDA reviews, indemnity and IP assignment clauses were most commonly flagged.",
+        "relevance_score": 0.88,
+        "is_stale": false,
+        "selected": true
+      }
+    ],
+    "selected": ["mem-10"]
+  },
+  "permissions": {
+    "acl_filters": []
+  },
+  "tools": [
+    {
+      "name": "extract_clauses",
+      "args": {"doc_id": "doc-nda-acme"},
+      "status": "success",
+      "latency_ms": 340
+    },
+    {
+      "name": "compare_to_template",
+      "args": {"doc_id": "doc-nda-acme", "template_id": "doc-nda-template"},
+      "status": "success",
+      "latency_ms": 520
+    },
+    {
+      "name": "extract_clauses",
+      "args": {"doc_id": "doc-nda-acme"},
+      "status": "success",
+      "latency_ms": 310
+    },
+    {
+      "name": "compare_to_template",
+      "args": {"doc_id": "doc-nda-acme", "template_id": "doc-nda-template"},
+      "status": "success",
+      "latency_ms": 490
+    },
+    {
+      "name": "extract_clauses",
+      "args": {"doc_id": "doc-nda-acme"},
+      "status": "success",
+      "latency_ms": 330
+    },
+    {
+      "name": "flag_nonstandard",
+      "args": {"clauses": ["indemnity", "ip-assignment", "non-compete"]},
+      "status": "success",
+      "latency_ms": 150
+    }
+  ],
+  "reasoning_steps": [
+    {"step": 1, "type": "think", "content": "Need to review NDA against standard template"},
+    {"step": 2, "type": "tool_call", "content": "Extracting clauses from Acme NDA"},
+    {"step": 3, "type": "tool_call", "content": "Comparing to standard template"},
+    {"step": 4, "type": "think", "content": "Results unclear, re-extracting clauses"},
+    {"step": 5, "type": "tool_call", "content": "Re-extracting clauses from Acme NDA"},
+    {"step": 6, "type": "tool_call", "content": "Re-comparing to standard template"},
+    {"step": 7, "type": "think", "content": "Still not confident, trying once more"},
+    {"step": 8, "type": "tool_call", "content": "Third extraction attempt"},
+    {"step": 9, "type": "tool_call", "content": "Flagging non-standard clauses"},
+    {"step": 10, "type": "generate", "content": "Generating review summary"}
+  ],
+  "output": {
+    "final_answer": "The Acme Corp NDA contains 3 non-standard clauses:\n1. Indemnity clause exceeds standard liability cap\n2. IP assignment scope is broader than template\n3. Non-compete duration is 24 months vs standard 12 months\n\nRecommendation: Negotiate indemnity cap and non-compete duration.",
+    "citations": ["doc-nda-acme", "doc-nda-template"]
+  },
+  "expected_answer": "Flag indemnity, IP assignment, and non-compete clauses as non-standard.",
+  "expected_tools": ["extract_clauses", "compare_to_template", "flag_nonstandard"],
+  "metrics": {
+    "latency_ms": 4200,
+    "prompt_tokens": 8500,
+    "completion_tokens": 620,
+    "total_tokens": 9120,
+    "estimated_cost": 0.14
+  }
+}

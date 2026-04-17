@@ -1,0 +1,14 @@
+# ContextOps gate configuration
+# Used by: contextops gate check --config .contextops/gates.yaml
+
+minimum_scores:
+  correctness: 0.90
+  groundedness: 0.85
+  retrieval_recall: 0.80
+  permission_safety: 1.00
+  task_completion: 0.85
+
+maximum_thresholds:
+  latency_ms_p95: 5000
+  cost_per_run_usd: 0.10
+  memory_staleness_rate: 0.10

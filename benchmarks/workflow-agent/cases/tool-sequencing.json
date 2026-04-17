@@ -1,0 +1,15 @@
+{
+  "name": "tool-sequencing",
+  "description": "Tests whether the agent calls tools in the correct order without redundant calls",
+  "query": "Create a purchase order for 50 laptops from Dell, get manager approval, and submit",
+  "simulate_user_roles": ["procurement"],
+  "expected_tools": ["lookup_vendor", "create_purchase_order", "request_approval", "submit_order"],
+  "forbidden_tools": ["delete_order"],
+  "pass_criteria": {
+    "tool_argument_correctness": 0.90,
+    "trajectory_quality": 0.85,
+    "task_completion": 1.00
+  },
+  "max_tool_calls": 6,
+  "expected_answer": "Purchase order PO-2025-001 created for 50 Dell laptops, approved by manager, and submitted successfully."
+}

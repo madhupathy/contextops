@@ -1,0 +1,109 @@
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "run_id": "run-pto-001",
+  "user": {
+    "id": "u-123",
+    "role": "employee",
+    "groups": ["engineering"]
+  },
+  "agent": {
+    "id": "policy-assistant",
+    "version": "0.1.0"
+  },
+  "input": {
+    "query": "What is the latest PTO policy?"
+  },
+  "retrieval": {
+    "candidates": [
+      {
+        "doc_id": "doc-old-pto",
+        "title": "PTO Policy 2024",
+        "score": 0.83,
+        "acl_passed": true,
+        "selected": true
+      },
+      {
+        "doc_id": "doc-new-pto",
+        "title": "PTO Policy 2025",
+        "score": 0.79,
+        "acl_passed": false,
+        "acl_reason": "group-mapping-mismatch",
+        "selected": false
+      },
+      {
+        "doc_id": "doc-exec-pto",
+        "title": "Executive PTO Guidelines",
+        "score": 0.65,
+        "acl_passed": false,
+        "acl_reason": "role_mismatch",
+        "selected": false
+      }
+    ],
+    "selected": ["doc-old-pto"]
+  },
+  "memory": {
+    "candidates": [
+      {
+        "memory_id": "mem-01",
+        "type": "episodic",
+        "summary": "User asked about PTO policy last year",
+        "content": "User previously asked about PTO in Dec 2024, was told 15 days",
+        "relevance_score": 0.72,
+        "is_stale": true,
+        "stale_reason": "Policy updated since last interaction",
+        "selected": true
+      },
+      {
+        "memory_id": "mem-02",
+        "type": "preference",
+        "summary": "User prefers concise answers",
+        "content": "User has preference for bullet-point summaries",
+        "relevance_score": 0.45,
+        "is_stale": false,
+        "selected": false
+      }
+    ],
+    "selected": ["mem-01"]
+  },
+  "permissions": {
+    "acl_filters": [
+      {
+        "doc_id": "doc-new-pto",
+        "result": "filtered",
+        "reason": "group-mapping-mismatch"
+      },
+      {
+        "doc_id": "doc-exec-pto",
+        "result": "filtered",
+        "reason": "role_mismatch"
+      }
+    ]
+  },
+  "tools": [
+    {
+      "name": "search_hr_docs",
+      "args": {"query": "PTO policy latest", "limit": 5},
+      "status": "success",
+      "latency_ms": 180
+    }
+  ],
+  "reasoning_steps": [
+    {"step": 1, "type": "think", "content": "User wants to know about PTO policy"},
+    {"step": 2, "type": "retrieve", "content": "Searching HR document store"},
+    {"step": 3, "type": "remember", "content": "Found prior conversation about PTO"},
+    {"step": 4, "type": "generate", "content": "Generating answer from retrieved docs and memory"}
+  ],
+  "output": {
+    "final_answer": "Based on our records, the PTO policy allows 15 days of paid time off per year for full-time employees. You can carry over up to 5 unused days to the next year.",
+    "citations": ["doc-old-pto"]
+  },
+  "expected_answer": "The 2025 PTO policy allows 20 days of paid time off per year for full-time employees, with unlimited carry-over.",
+  "expected_sources": ["doc-new-pto"],
+  "metrics": {
+    "latency_ms": 1820,
+    "prompt_tokens": 2400,
+    "completion_tokens": 380,
+    "total_tokens": 2780,
+    "estimated_cost": 0.042
+  }
+}

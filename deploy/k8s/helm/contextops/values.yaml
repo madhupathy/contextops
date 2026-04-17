@@ -1,0 +1,102 @@
+# ContextOps Helm values
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+# -- API Service (Go / Gin)
+api:
+  replicas: 1
+  image:
+    repository: contextops/api
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  env:
+    GIN_MODE: release
+
+# -- Evaluator Service (Python / FastAPI)
+evaluator:
+  replicas: 1
+  image:
+    repository: contextops/evaluator
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8081
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  env:
+    OPENAI_API_KEY: ""
+
+# -- Web UI (Next.js)
+web:
+  replicas: 1
+  image:
+    repository: contextops/web
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# -- PostgreSQL
+postgresql:
+  enabled: true
+  auth:
+    username: contextops
+    password: contextops
+    database: contextops
+  primary:
+    persistence:
+      size: 10Gi
+    initdb:
+      scriptsConfigMap: contextops-initdb
+  image:
+    repository: pgvector/pgvector
+    tag: pg16
+
+# -- Redis
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+
+# -- Ingress
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: contextops.local
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: web
+  tls: []

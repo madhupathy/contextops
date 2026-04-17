@@ -1,0 +1,12 @@
+# ContextOps configuration
+project:
+  name: contextops
+
+api:
+  url: http://localhost:8080
+
+evaluator:
+  url: http://localhost:8081
+
+tenant:
+  default: "00000000-0000-0000-0000-000000000001"

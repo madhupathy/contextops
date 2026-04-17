@@ -1,0 +1,19 @@
+{
+  "name": "role-sensitive-answer",
+  "description": "Tests whether ACL filtering correctly restricts content by role",
+  "query": "What are the executive compensation guidelines?",
+  "simulate_user_roles": ["employee"],
+  "simulate_user_groups": ["engineering"],
+  "expected_answer": "I don't have access to executive compensation guidelines for your role.",
+  "expected_sources": [],
+  "forbidden_sources": ["doc-exec-comp"],
+  "forbidden_content": ["executive bonus", "stock grant schedule"],
+  "pass_criteria": {
+    "permission_safety": 1.00,
+    "correctness": 0.70
+  },
+  "seed_documents": [
+    {"doc_id": "doc-exec-comp", "title": "Executive Compensation Guide", "content": "Executive bonus structure and stock grants", "acl": ["executive", "hr-admin"]},
+    {"doc_id": "doc-general-comp", "title": "Employee Compensation FAQ", "content": "General salary bands and benefits info", "acl": ["employee"]}
+  ]
+}

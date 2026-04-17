@@ -1,0 +1,16 @@
+{
+  "name": "clause-lookup",
+  "description": "Tests whether the system can find a specific clause in a contract",
+  "query": "What is the termination clause in the Acme Corp service agreement?",
+  "simulate_user_roles": ["legal"],
+  "expected_answer": "The termination clause (Section 8.2) allows either party to terminate with 30 days written notice.",
+  "expected_sources": ["doc-acme-agreement"],
+  "pass_criteria": {
+    "correctness": 0.90,
+    "groundedness": 0.95,
+    "citation_precision": 0.90
+  },
+  "seed_documents": [
+    {"doc_id": "doc-acme-agreement", "title": "Acme Corp Service Agreement", "content": "Section 8.2 Termination: Either party may terminate this agreement with 30 days written notice.", "acl": ["legal", "management"]}
+  ]
+}

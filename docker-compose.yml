@@ -1,0 +1,86 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: contextops-postgres
+    environment:
+      POSTGRES_USER: contextops
+      POSTGRES_PASSWORD: contextops
+      POSTGRES_DB: contextops
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contextops -d contextops"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: contextops-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: contextops-api
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://contextops:contextops@postgres:5432/contextops?sslmode=disable"
+      REDIS_URL: "redis://redis:6379/0"
+      GIN_MODE: "release"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  evaluator:
+    build:
+      context: ./apps/evaluator
+      dockerfile: Dockerfile
+    container_name: contextops-evaluator
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: "postgresql://contextops:contextops@postgres:5432/contextops"
+      REDIS_URL: "redis://redis:6379/0"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: contextops-web
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8080"
+      NEXT_PUBLIC_EVALUATOR_URL: "http://localhost:8081"
+    depends_on:
+      - api
+      - evaluator
+    restart: unless-stopped
+
+volumes:
+  pgdata:
