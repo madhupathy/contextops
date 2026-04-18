@@ -4,12 +4,13 @@
 
 **You know your AI gave the wrong answer. ContextOps tells you exactly why.**
 
-ContextOps is an open-source evaluation and debugging platform for AI agents, RAG systems, and enterprise copilots. It evaluates the full execution path — retrieval quality, memory, ACL safety, tool calls, cost — not just whether the final answer looked correct.
+ContextOps is an open-source evaluation and debugging platform for AI agents, RAG systems, and enterprise copilots. It evaluates the full execution path — not just the final answer.
 
 [![CI](https://github.com/madhupathy/contextops/actions/workflows/ci.yml/badge.svg)](https://github.com/madhupathy/contextops/actions/workflows/ci.yml)
 [![Go 1.22+](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Evaluators](https://img.shields.io/badge/Evaluators-12-7c3aed)](#12-evaluators)
 
 </div>
 
@@ -17,17 +18,18 @@ ContextOps is an open-source evaluation and debugging platform for AI agents, RA
 
 ## The Problem
 
-Your RAG-based enterprise assistant confidently tells an employee the wrong PTO policy. You check the logs: the final answer got a 0.87 similarity score from your evaluation pipeline. "Looks good," it says.
+Your RAG assistant gives an employee the wrong PTO policy. You check your eval pipeline — the answer scored **0.87 similarity**. "Looks good," it says.
 
-But here's what actually happened:
-1. The retriever fetched the **2024 policy** instead of the **2025 update**
-2. A **stale memory** from last quarter got injected into the context
-3. The **correct document was ACL-filtered out** due to a misconfigured group mapping
-4. The model produced a confident, well-structured answer based on wrong information
+Here's what actually happened:
 
-Existing evaluation tools — RAGAS, LangSmith evals, custom scripts — answer one question: *"Was the final answer good?"* They miss everything that happened before the answer was generated.
+1. The retriever fetched the **2024 policy** — not the 2025 update
+2. A **stale memory** from a prior session was injected into context
+3. The **correct 2025 doc was ACL-filtered out** due to a misconfigured group mapping
+4. The model produced a confident, well-structured answer from wrong information
 
-ContextOps answers: **"Where in the pipeline did this fail, and how do we catch it before it reaches production?"**
+LangSmith, Langfuse, Arize Phoenix — they all answer: *"Was the final answer good?"*
+
+ContextOps answers: **"Where in the pipeline did this fail, and how do we prevent it next time?"**
 
 ---
 
@@ -37,25 +39,22 @@ ContextOps answers: **"Where in the pipeline did this fail, and how do we catch 
 User query
     │
     ▼
-Retrieval candidates ←── ContextOps checks:
-    │                      • Did we fetch the right docs?
-    │                      • Were better docs ranked lower?
-    │                      • Did ACL filters block the correct doc?
+Retrieval ──────── Did we fetch the right docs?
+    │               Were better docs ranked lower?
+    │               Did ACL filters block the correct doc? ← permission_safety
     ▼
-Memory injection ←──────  ContextOps checks:
-    │                      • Is this memory stale?
-    │                      • Does it conflict with newer context?
-    │                      • Was useful memory ignored?
+Memory injection ── Is this memory stale?         ← memory_utility
+    │               Does it conflict with new docs? ← context_poisoning
+    │               Was the user's preference honoured? ← session_coherence
     ▼
-Tool calls ←────────────  ContextOps checks:
-    │                      • Was the right tool selected?
-    │                      • Were arguments correct?
-    │                      • Did the workflow loop unnecessarily?
+Tool calls ────────  Was the right tool selected?  ← tool_correctness
+    │               Were arguments correct?
+    │               Did the workflow loop?          ← trajectory_quality
     ▼
-Final answer ←──────────  ContextOps checks:
-                           • Is the answer grounded in evidence?
-                           • Does it cite restricted documents?
-                           • Did accuracy regress vs. last version?
+Final answer ──────  Is it factually correct?      ← answer_correctness
+                    Is every claim cited?           ← citation_precision
+                    Was the task actually done?     ← task_completion
+                    Was it grounded in evidence?    ← groundedness
 ```
 
 ---
@@ -64,21 +63,27 @@ Final answer ←──────────  ContextOps checks:
 
 **Query:** "What is the latest PTO policy?"
 
-**What the system did:**
-1. Retrieved `PTO Policy 2024` (score: 0.83) — selected
-2. Retrieved `PTO Policy 2025` (score: 0.79) — **filtered by ACL bug**
-3. Injected stale memory: "User asked about PTO last year"
-4. Produced confident answer based on the wrong document
+**What happened internally:**
+
+| Step | Result |
+|---|---|
+| Retrieved `PTO Policy 2024` (score: 0.83) | ✅ Selected |
+| Retrieved `PTO Policy 2025` (score: 0.79) | ❌ ACL-blocked — `group-mapping-mismatch` |
+| Injected episodic memory from Dec 2024 | ⚠️ Stale — policy updated since |
+| Final answer: "15 days, carry over 5" | ❌ Wrong — 2025 policy is 20 days, unlimited carry-over |
 
 **ContextOps report:**
+
 ```
-retrieval_quality    0.41  FAIL  Better document rejected by ACL filter
-memory_staleness     0.20  FAIL  Injected episodic memory is 9 months old
-permission_safety    0.00  FAIL  CRITICAL: ACL misconfiguration blocked correct document
-correctness          0.00  FAIL  Final answer contradicts current policy
+retrieval_quality    0.41  FAIL  Better document blocked by ACL misconfiguration
+permission_safety    0.00  FAIL  CRITICAL: ACL filter prevented correct doc from being selected
+memory_utility       0.30  FAIL  Stale episodic memory injected (policy changed since last interaction)
+context_poisoning    0.10  FAIL  CRITICAL: Stale value "15 days" in answer — not present in current docs
+answer_correctness   0.00  FAIL  Answer contradicts expected answer (20 days)
+session_coherence    1.00  PASS  No session-level contradictions
 ```
 
-**That level of visibility** is what ContextOps provides. Not a final-answer score. A full-stack diagnosis.
+**Grade: F (avg: 0.30)** — that 0.87 similarity score missed everything that mattered.
 
 ---
 
@@ -105,66 +110,114 @@ go install github.com/madhupathy/contextops/apps/cli@latest
 contextops init
 contextops trace ingest ./examples/traces/pto-policy-failure.json
 contextops eval run <run-id> --explain
-contextops compare <run-a> <run-b>
 contextops gate check --config .contextops/gates.yaml
 ```
 
 ---
 
-## Ingesting a Trace
+## Ingest a Trace
 
-Send a single JSON object capturing everything that happened in one AI run:
-
-```json
-{
-  "run_id": "run-001",
-  "agent": { "id": "policy-assistant", "version": "0.2.1" },
-  "input": { "query": "What is the latest PTO policy?" },
-  "retrieval": {
-    "candidates": [
-      { "doc_id": "doc-pto-2024", "score": 0.83, "selected": true, "acl_passed": true },
-      { "doc_id": "doc-pto-2025", "score": 0.79, "selected": false, "acl_passed": false,
-        "acl_reason": "group-mapping-mismatch" }
-    ]
-  },
-  "memory": {
-    "candidates": [
-      { "memory_id": "mem-01", "summary": "User asked about PTO last year",
-        "age_days": 287, "selected": true }
-    ]
-  },
-  "output": {
-    "final_answer": "The PTO policy allows 15 days...",
-    "citations": ["doc-pto-2024"]
-  },
-  "metrics": { "latency_ms": 1820, "prompt_tokens": 2400 }
-}
-```
+Send one JSON object capturing everything that happened in a run:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/runs \
   -H 'Content-Type: application/json' \
-  -d @my-run.json
+  -d '{
+    "query": "What is the latest PTO policy?",
+    "final_answer": "The PTO policy allows 15 days...",
+    "citations": ["doc-old-pto"],
+    "retrieval": {
+      "candidates": [
+        { "doc_id": "doc-pto-2024", "score": 0.83, "selected": true, "acl_passed": true },
+        { "doc_id": "doc-pto-2025", "score": 0.79, "selected": false, "acl_passed": false,
+          "acl_reason": "group-mapping-mismatch" }
+      ]
+    },
+    "memory": {
+      "candidates": [
+        { "memory_id": "mem-01", "memory_type": "episodic",
+          "content": "User asked about PTO in 2024 — 15 days at that time",
+          "is_stale": true, "stale_reason": "Policy updated Jan 2025", "selected": true }
+      ]
+    },
+    "metrics": { "latency_ms": 1820, "total_tokens": 2780, "estimated_cost": 0.042 }
+  }'
+```
+
+Then evaluate it:
+
+```bash
+# Run all 12 evaluators
+curl -X POST http://localhost:8080/api/v1/runs/<run-id>/evaluate
+
+# Run by profile
+curl -X POST "http://localhost:8081/evaluate/profile?run_id=<run-id>&profile=enterprise"
+
+# Get a grade summary
+curl http://localhost:8080/api/v1/runs/<run-id>/eval-summary
 ```
 
 ---
 
-## Evaluators
+## 12 Evaluators
 
-| Evaluator | What it measures | Key signal |
-|-----------|-----------------|------------|
-| `correctness` | Is the final answer factually right? | Compared against ground truth |
-| `groundedness` | Is every claim supported by retrieved evidence? | Citation coverage |
-| `retrieval_precision` | Were retrieved docs relevant to the query? | Relevance scoring |
-| `retrieval_recall` | Were the *best* docs actually retrieved? | Missed expected sources |
-| `memory_relevance` | Was selected memory helpful, not distracting? | Memory signal quality |
-| `memory_staleness` | Was outdated memory injected? | Memory age + conflict detection |
-| `permission_safety` | Did any ACL-blocked content appear in the answer? | Critical — zero tolerance |
-| `trajectory_quality` | Was the reasoning path efficient? | Loops, redundant steps |
-| `tool_correctness` | Were tool calls right (name + arguments)? | Tool call accuracy |
-| `cost_efficiency` | Was token spend reasonable for the task? | Tokens per outcome |
+### Core Quality
+| Evaluator | What it catches |
+|---|---|
+| `answer_correctness` | Wrong facts, compared to expected answer or via LLM-as-judge |
+| `groundedness` | Claims not supported by retrieved evidence — hallucinations |
+| `citation_precision` | Hallucinated citation IDs, citations to ACL-blocked docs, unsupported citations |
+| `task_completion` | Action intents that deflect to the user instead of executing; lookup answers missing the point |
 
-Each evaluator returns: **numeric score (0–1)**, **pass/fail**, **explanation**, **evidence**, and **remediation hints**.
+### Retrieval Pipeline
+| Evaluator | What it catches |
+|---|---|
+| `retrieval_quality` | Wrong docs fetched, better docs ranked lower, missed expected sources |
+| `permission_safety` | ACL-blocked content in the answer, blocked docs cited, missing ACL data |
+
+### Memory & Context
+| Evaluator | What it catches |
+|---|---|
+| `memory_utility` | Stale memory selected, high-relevance memory ignored, poor selection quality |
+| `context_poisoning` | Stale values contaminating the answer, numeric drift from old context, self-contradictions |
+| `session_coherence` | User preferences not honoured, entity contradictions across turns, temporal inconsistency |
+
+### Agent Behaviour
+| Evaluator | What it catches |
+|---|---|
+| `tool_correctness` | Wrong tool selected, incorrect arguments, loops, unapproved high-risk tool calls |
+| `trajectory_quality` | Excessive steps, loops, thinking without acting, incomplete execution |
+
+### Cost & Performance
+| Evaluator | What it catches |
+|---|---|
+| `cost_efficiency` | Token spend, latency, and cost outside acceptable bounds |
+
+Each evaluator returns: **score (0–1)**, **pass/fail**, **reasoning**, **evidence**, and **remediation hints**.
+
+---
+
+## Evaluation Profiles
+
+Run the evaluators most relevant to your use case:
+
+```bash
+# RAG pipeline quality
+POST /evaluate/profile?run_id=X&profile=rag
+# → retrieval_quality, groundedness, citation_precision, permission_safety, answer_correctness, context_poisoning
+
+# Agentic task execution
+POST /evaluate/profile?run_id=X&profile=agent
+# → tool_correctness, trajectory_quality, task_completion, answer_correctness, cost_efficiency
+
+# Multi-session memory systems
+POST /evaluate/profile?run_id=X&profile=memory
+# → memory_utility, session_coherence, context_poisoning, groundedness
+
+# Enterprise safety gate
+POST /evaluate/profile?run_id=X&profile=enterprise
+# → permission_safety, citation_precision, groundedness, answer_correctness, context_poisoning, session_coherence
+```
 
 ---
 
@@ -178,34 +231,35 @@ minimum_scores:
   retrieval_recall: 0.88
   permission_safety: 1.00    # zero tolerance — any ACL leak = block
   task_completion: 0.90
+  context_poisoning: 0.95
 
 maximum_thresholds:
   latency_ms_p95: 3500
   cost_per_run_usd: 0.08
-  memory_staleness_rate: 0.05
 ```
 
 ```bash
-# In your CI pipeline
 contextops gate check --config .contextops/gates.yaml
-# Exits 1 if any threshold is violated
+# Exits 1 if any threshold violated — blocks the deploy
 ```
 
 ---
 
 ## Benchmark Packs
 
-Pre-built scenario suites you can run against your system out of the box:
+Pre-built scenario suites targeting real enterprise failure modes:
 
-| Pack | Tests |
-|------|-------|
-| **Enterprise Search** | Latest policy retrieval, role-sensitive answers, doc freshness, citation accuracy |
-| **Memory Assistant** | Long-lived user preferences, stale memory suppression, conflict resolution |
-| **Workflow Agent** | Tool sequencing, approval gates, side-effect validation, completion accuracy |
-| **Document Copilot** | Clause lookup, summarization grounding, extraction accuracy, ACL enforcement |
+| Pack | What it tests |
+|---|---|
+| **Enterprise Search** | Latest policy retrieval, role-sensitive answers, citation accuracy, action task completion |
+| **Memory Poisoning** | Stale value override, preference persistence across sessions, ACL-blocked content in memory |
+| **Memory Assistant** | Long-lived preferences, stale memory suppression, conflict resolution |
+| **Workflow Agent** | Tool sequencing, approval gates, side-effect validation |
+| **Document Copilot** | Clause lookup, summarization grounding, extraction accuracy |
 
 ```bash
 contextops benchmark run enterprise-search
+contextops benchmark run memory-poisoning
 contextops compare benchmark enterprise-search --baseline v0.1 --candidate v0.2
 ```
 
@@ -213,38 +267,19 @@ contextops compare benchmark enterprise-search --baseline v0.1 --candidate v0.2
 
 ## How ContextOps Compares
 
-| Capability | LangSmith | RAGAS | ContextOps |
-|------------|-----------|-------|------------|
-| Final answer correctness | ✅ | ✅ | ✅ |
-| Groundedness / hallucination | Partial | ✅ | ✅ |
-| Retrieval ranking diagnosis | ❌ | Partial | ✅ |
-| ACL / permission safety | ❌ | ❌ | ✅ |
-| Memory evaluation | ❌ | ❌ | ✅ |
-| Tool call evaluation | Partial | ❌ | ✅ |
-| Regression testing via CI gates | ❌ | ❌ | ✅ |
-| Self-hosted / open source | ❌ | ✅ | ✅ |
-
----
-
-## Project Structure
-
-```
-contextops/
-├── apps/
-│   ├── api/           # Go REST API (Gin, multi-tenant, JWT auth)
-│   ├── cli/           # Go CLI (Cobra) — init, trace, eval, benchmark, gate, compare
-│   ├── evaluator/     # Python evaluation engine (FastAPI + async evaluators)
-│   └── web/           # Next.js debugger UI
-├── packages/
-│   ├── trace-schema/  # JSON Schema for the run trace format
-│   ├── evaluator-core/ # Shared evaluator interfaces
-│   ├── context-manifest/ # Context assembly specification
-│   ├── benchmark-core/ # Dataset runners and scoring
-│   └── policy-core/   # ACL / permission check utilities
-├── adapters/          # REST, LangGraph, OpenAI Agents SDK, OpenTelemetry
-├── benchmarks/        # Enterprise search, memory, workflow, doc copilot suites
-└── deploy/            # Docker Compose, Kubernetes / Helm charts
-```
+| Capability | LangSmith | RAGAS | Arize Phoenix | **ContextOps** |
+|---|:---:|:---:|:---:|:---:|
+| Final answer correctness | ✅ | ✅ | ✅ | ✅ |
+| Groundedness / hallucination | Partial | ✅ | Partial | ✅ |
+| Retrieval ranking diagnosis | ❌ | Partial | Partial | ✅ |
+| ACL / permission safety | ❌ | ❌ | ❌ | ✅ |
+| Memory staleness detection | ❌ | ❌ | ❌ | ✅ |
+| Context poisoning detection | ❌ | ❌ | ❌ | ✅ |
+| Session coherence / preference | ❌ | ❌ | ❌ | ✅ |
+| Citation precision (not just existence) | ❌ | Partial | ❌ | ✅ |
+| Task completion vs deflection | ❌ | ❌ | ❌ | ✅ |
+| Regression CI gates | ❌ | ❌ | Partial | ✅ |
+| Self-hosted / open-source | ❌ | ✅ | ✅ (Phoenix) | ✅ |
 
 ---
 
@@ -255,9 +290,9 @@ cp .env.example .env
 ```
 
 | Variable | Required | Description |
-|----------|----------|-------------|
+|---|---|---|
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Yes | Postgres credentials |
-| `DATABASE_URL` | Yes | Full Postgres connection string for the API |
+| `DATABASE_URL` | Yes | Full connection string for API and evaluator |
 | `REDIS_URL` | Yes | Redis connection string |
 | `OPENAI_API_KEY` | Optional | For LLM-as-judge evaluators; falls back to heuristics if unset |
 | `NEXT_PUBLIC_API_URL` | Yes | API base URL for the web UI |
@@ -267,9 +302,68 @@ cp .env.example .env
 
 ---
 
+## API Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/runs` | Ingest a run trace |
+| `GET` | `/api/v1/runs` | List all runs |
+| `GET` | `/api/v1/runs/:id/timeline` | Full debug view: run + retrieval + memory + tools + steps + evals |
+| `POST` | `/api/v1/runs/:id/evaluate` | Trigger evaluation (all 12 or selected categories) |
+| `GET` | `/api/v1/runs/:id/eval-summary` | Grade (A–F), avg score, critical failures |
+| `POST` | `/evaluate/profile` | Evaluate by intent profile (rag/agent/memory/enterprise/full) |
+| `GET` | `/evaluators/profiles` | List all profiles with category sets |
+| `POST` | `/evaluate/batch` | Evaluate multiple runs in one call |
+| `POST` | `/api/v1/benchmarks/:id/run` | Run a benchmark suite |
+| `GET` | `/api/v1/benchmarks/:id/results` | Get benchmark results with regression detection |
+| `POST` | `/api/v1/compare` | Compare two runs side-by-side |
+
+---
+
+## Project Structure
+
+```
+contextops/
+├── apps/
+│   ├── api/               # Go REST API (Gin, multi-tenant JWT auth)
+│   ├── cli/               # Go CLI (Cobra) — init, trace, eval, benchmark, gate, compare
+│   ├── evaluator/         # Python evaluation engine (FastAPI, 12 evaluators)
+│   └── web/               # Next.js debugger UI
+├── packages/
+│   ├── trace-schema/      # JSON Schema for the run trace format
+│   ├── evaluator-core/    # Shared evaluator interfaces
+│   ├── context-manifest/  # Context assembly specification
+│   ├── benchmark-core/    # Dataset runners and scoring
+│   └── policy-core/       # ACL / permission utilities
+├── adapters/              # REST, LangGraph, OpenAI Agents SDK, OpenTelemetry
+├── benchmarks/            # Enterprise search, memory-poisoning, memory, workflow, doc copilot
+├── examples/traces/       # Ready-to-ingest example traces
+└── deploy/                # Docker Compose, Kubernetes / Helm charts
+```
+
+---
+
+## Roadmap
+
+- [x] 12 evaluators across correctness, retrieval, memory, context, agent, cost
+- [x] Context poisoning and session coherence detection
+- [x] Citation precision (not just existence)
+- [x] Task completion vs deflection
+- [x] Intent-based evaluation profiles
+- [x] CI gate enforcement
+- [x] Benchmark packs with regression detection
+- [x] Full run timeline API (retrieval + memory + tools + trace)
+- [ ] OTEL collector adapter
+- [ ] LangGraph and OpenAI Agents SDK adapters
+- [ ] Dataset versioning and sampling
+- [ ] Human-in-the-loop annotation queue
+- [ ] Hosted SaaS
+
+---
+
 ## Contributing
 
-Contributions welcome in: new evaluators, adapter integrations, benchmark datasets, UI improvements, and documentation. See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions welcome in: new evaluators, adapter integrations, benchmark datasets, and documentation.
 
 ## License
 
