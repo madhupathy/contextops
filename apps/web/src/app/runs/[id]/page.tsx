@@ -1,423 +1,441 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import {
   AlertTriangle,
   ArrowLeft,
-  BookOpen,
-  Brain,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Cpu,
-  Database,
   DollarSign,
-  Eye,
-  EyeOff,
+  FileText,
+  Lock,
+  MemoryStick,
   Shield,
-  ShieldAlert,
+  Star,
   Wrench,
   XCircle,
+  Zap,
 } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
-interface Timeline {
-  run: any;
-  retrieval_candidates: any[];
-  memory_candidates: any[];
-  tool_calls: any[];
-  reasoning_steps: any[];
-  evaluations: any[];
+interface Evaluation {
+  category: string;
+  score: number;
+  passed: boolean;
+  reasoning: string | null;
+  details: Record<string, unknown>;
+  eval_latency_ms: number;
 }
 
-export default function RunDetailPage({ params }: { params: { id: string } }) {
-  const [timeline, setTimeline] = useState<Timeline | null>(null);
+interface RunTimeline {
+  run: {
+    id: string;
+    query: string;
+    final_answer: string | null;
+    status: string;
+    model: string | null;
+    total_tokens: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    latency_ms: number;
+    estimated_cost: number;
+    created_at: string;
+  };
+  retrieval_candidates: Array<{
+    doc_id: string;
+    title: string | null;
+    score: number;
+    selected: boolean;
+    acl_passed: boolean;
+    acl_reason: string | null;
+    rejection_reason: string | null;
+  }>;
+  memory_candidates: Array<{
+    memory_id: string;
+    memory_type: string;
+    content: string;
+    relevance_score: number;
+    is_stale: boolean;
+    stale_reason: string | null;
+    selected: boolean;
+  }>;
+  tool_calls: Array<{
+    tool_name: string;
+    step_number: number;
+    status: string;
+    latency_ms: number;
+    error_message: string | null;
+  }>;
+  reasoning_steps: Array<{
+    step_number: number;
+    step_type: string;
+    content: string;
+    tokens_used: number;
+  }>;
+  evaluations: Evaluation[];
+}
+
+const CATEGORY_META: Record<string, { label: string; icon: JSX.Element; group: string }> = {
+  answer_correctness:  { label: "Answer Correctness",  icon: <CheckCircle2 className="w-4 h-4" />, group: "core" },
+  groundedness:        { label: "Groundedness",         icon: <FileText className="w-4 h-4" />,    group: "core" },
+  citation_precision:  { label: "Citation Precision",   icon: <Star className="w-4 h-4" />,        group: "core" },
+  task_completion:     { label: "Task Completion",      icon: <Zap className="w-4 h-4" />,         group: "core" },
+  retrieval_quality:   { label: "Retrieval Quality",    icon: <ChevronRight className="w-4 h-4" />, group: "retrieval" },
+  permission_safety:   { label: "Permission Safety",    icon: <Shield className="w-4 h-4" />,      group: "retrieval" },
+  memory_utility:      { label: "Memory Utility",       icon: <MemoryStick className="w-4 h-4" />, group: "memory" },
+  context_poisoning:   { label: "Context Poisoning",    icon: <AlertTriangle className="w-4 h-4" />, group: "memory" },
+  session_coherence:   { label: "Session Coherence",    icon: <Lock className="w-4 h-4" />,        group: "memory" },
+  tool_correctness:    { label: "Tool Correctness",     icon: <Wrench className="w-4 h-4" />,      group: "agent" },
+  trajectory_quality:  { label: "Trajectory Quality",   icon: <Zap className="w-4 h-4" />,         group: "agent" },
+  cost_efficiency:     { label: "Cost Efficiency",      icon: <DollarSign className="w-4 h-4" />,  group: "cost" },
+};
+
+const GROUP_LABELS: Record<string, string> = {
+  core: "Core Quality",
+  retrieval: "Retrieval Pipeline",
+  memory: "Memory & Context",
+  agent: "Agent Behaviour",
+  cost: "Cost & Performance",
+};
+
+export default function RunDetailPage() {
+  const params = useParams();
+  const runId = params.id as string;
+  const [timeline, setTimeline] = useState<RunTimeline | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState<"evaluations" | "retrieval" | "memory" | "trace">("evaluations");
 
   useEffect(() => {
-    fetchTimeline();
-  }, [params.id]);
-
-  async function fetchTimeline() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/runs/${params.id}/timeline`);
-      if (res.ok) {
-        setTimeline(await res.json());
-      }
-    } catch (e) {
-      console.error("Failed to fetch timeline:", e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function triggerEvaluation() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/runs/${params.id}/evaluate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) {
-        setTimeout(fetchTimeline, 2000);
-      }
-    } catch (e) {
-      console.error("Failed to trigger evaluation:", e);
-    }
-  }
+    if (!runId) return;
+    fetch(`${API_URL}/api/v1/runs/${runId}/timeline`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) setTimeline(d); })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [runId]);
 
   if (loading) {
-    return <div className="text-center py-12 text-slate-500">Loading run timeline...</div>;
+    return <div className="p-8 text-center text-slate-500">Loading run details...</div>;
   }
-
   if (!timeline) {
-    return <div className="text-center py-12 text-slate-500">Run not found</div>;
+    return (
+      <div className="p-8 text-center">
+        <XCircle className="w-12 h-12 text-red-300 mx-auto mb-3" />
+        <p className="text-slate-500">Run not found</p>
+        <a href="/runs" className="text-brand-600 text-sm mt-2 inline-block">← Back to Runs</a>
+      </div>
+    );
   }
 
-  const { run, retrieval_candidates, memory_candidates, tool_calls, reasoning_steps, evaluations } =
-    timeline;
+  const { run, evaluations } = timeline;
+  const passed = evaluations.filter((e) => e.passed).length;
+  const avgScore = evaluations.length > 0
+    ? evaluations.reduce((s, e) => s + e.score, 0) / evaluations.length
+    : 0;
 
-  const tabs = [
-    { id: "overview", label: "Overview", icon: <Eye className="w-4 h-4" /> },
-    {
-      id: "retrieval",
-      label: `Retrieval (${retrieval_candidates.length})`,
-      icon: <Database className="w-4 h-4" />,
-    },
-    {
-      id: "memory",
-      label: `Memory (${memory_candidates.length})`,
-      icon: <Brain className="w-4 h-4" />,
-    },
-    {
-      id: "tools",
-      label: `Tools (${tool_calls.length})`,
-      icon: <Wrench className="w-4 h-4" />,
-    },
-    {
-      id: "trajectory",
-      label: `Trajectory (${reasoning_steps.length})`,
-      icon: <BookOpen className="w-4 h-4" />,
-    },
-    {
-      id: "evaluations",
-      label: `Evaluations (${evaluations.length})`,
-      icon: <CheckCircle2 className="w-4 h-4" />,
-    },
-  ];
+  const criticalFails = evaluations.filter(
+    (e) => !e.passed && ["permission_safety", "context_poisoning"].includes(e.category)
+  );
+
+  // Group evaluations
+  const grouped: Record<string, Evaluation[]> = {};
+  for (const ev of evaluations) {
+    const group = CATEGORY_META[ev.category]?.group ?? "other";
+    (grouped[group] = grouped[group] || []).push(ev);
+  }
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between">
-        <div>
-          <a href="/runs" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-2">
-            <ArrowLeft className="w-4 h-4" /> Back to runs
+        <div className="flex-1">
+          <a href="/runs" className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-2">
+            <ArrowLeft className="w-4 h-4" /> Back to Runs
           </a>
-          <h1 className="text-xl font-bold text-slate-900 mt-1">Run Timeline</h1>
-          <p className="text-sm text-slate-500 mt-1 font-mono">{run.id}</p>
+          <h1 className="text-xl font-bold text-slate-900 line-clamp-2">{run.query}</h1>
+          <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
+            <span className="flex items-center gap-1"><Cpu className="w-3 h-3" /> {run.total_tokens.toLocaleString()} tokens</span>
+            <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {run.latency_ms}ms</span>
+            <span className="flex items-center gap-1"><DollarSign className="w-3 h-3" /> ${(run.estimated_cost || 0).toFixed(4)}</span>
+            <StatusBadge status={run.status} />
+          </div>
         </div>
-        <button
-          onClick={triggerEvaluation}
-          className="px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors"
-        >
-          Run Evaluation
-        </button>
+        {/* Score summary */}
+        <div className="text-right ml-6 shrink-0">
+          <div className={`text-3xl font-bold ${scoreColor(avgScore)}`}>
+            {(avgScore * 100).toFixed(0)}
+          </div>
+          <div className="text-xs text-slate-500 mt-0.5">{passed}/{evaluations.length} passed</div>
+        </div>
       </div>
 
-      {/* Run Summary */}
-      <div className="card p-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <h3 className="text-sm font-medium text-slate-500 mb-1">Query</h3>
-            <p className="text-base text-slate-900">{run.query}</p>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <MiniStat icon={<Clock className="w-4 h-4" />} label="Latency" value={`${run.latency_ms}ms`} />
-            <MiniStat icon={<Cpu className="w-4 h-4" />} label="Tokens" value={run.total_tokens?.toLocaleString() || "0"} />
-            <MiniStat icon={<DollarSign className="w-4 h-4" />} label="Cost" value={`$${(run.estimated_cost || 0).toFixed(4)}`} />
-            <MiniStat icon={<Shield className="w-4 h-4" />} label="Status" value={run.status} />
+      {/* Critical failure banner */}
+      {criticalFails.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-red-800">Critical failures detected</p>
+              {criticalFails.map((f) => (
+                <p key={f.category} className="text-sm text-red-700 mt-1">
+                  <strong>{CATEGORY_META[f.category]?.label ?? f.category}:</strong> {f.reasoning}
+                </p>
+              ))}
+            </div>
           </div>
         </div>
-        {run.final_answer && (
-          <div className="mt-4 pt-4 border-t border-slate-100">
-            <h3 className="text-sm font-medium text-slate-500 mb-1">Final Answer</h3>
-            <p className="text-sm text-slate-700 bg-slate-50 rounded-lg p-3">{run.final_answer}</p>
-          </div>
-        )}
-      </div>
+      )}
+
+      {/* Final answer */}
+      {run.final_answer && (
+        <div className="card p-4">
+          <h2 className="text-sm font-semibold text-slate-700 mb-2">Final Answer</h2>
+          <p className="text-sm text-slate-600 whitespace-pre-wrap">{run.final_answer}</p>
+        </div>
+      )}
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-slate-200">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === tab.id
-                ? "border-brand-600 text-brand-600"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {tab.icon}
-            {tab.label}
-          </button>
-        ))}
+      <div className="border-b border-slate-200">
+        <nav className="flex gap-6">
+          {(["evaluations", "retrieval", "memory", "trace"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`pb-3 text-sm font-medium border-b-2 capitalize transition-colors ${
+                activeTab === tab
+                  ? "border-brand-600 text-brand-600"
+                  : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </nav>
       </div>
 
-      {/* Tab Content */}
-      <div>
-        {activeTab === "overview" && <OverviewTab timeline={timeline} />}
-        {activeTab === "retrieval" && <RetrievalTab candidates={retrieval_candidates} />}
-        {activeTab === "memory" && <MemoryTab candidates={memory_candidates} />}
-        {activeTab === "tools" && <ToolsTab calls={tool_calls} />}
-        {activeTab === "trajectory" && <TrajectoryTab steps={reasoning_steps} />}
-        {activeTab === "evaluations" && <EvaluationsTab evaluations={evaluations} />}
-      </div>
+      {/* Tab content */}
+      {activeTab === "evaluations" && (
+        <div className="space-y-4">
+          {Object.entries(GROUP_LABELS).map(([groupKey, groupLabel]) => {
+            const evals = grouped[groupKey];
+            if (!evals?.length) return null;
+            return (
+              <div key={groupKey}>
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                  {groupLabel}
+                </h3>
+                <div className="space-y-2">
+                  {evals.map((ev) => (
+                    <EvalRow key={ev.category} ev={ev} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {activeTab === "retrieval" && (
+        <RetrievalTab candidates={timeline.retrieval_candidates} />
+      )}
+
+      {activeTab === "memory" && (
+        <MemoryTab candidates={timeline.memory_candidates} />
+      )}
+
+      {activeTab === "trace" && (
+        <TraceTab steps={timeline.reasoning_steps} toolCalls={timeline.tool_calls} />
+      )}
     </div>
   );
 }
 
-function MiniStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function EvalRow({ ev }: { ev: Evaluation }) {
+  const [open, setOpen] = useState(false);
+  const meta = CATEGORY_META[ev.category];
+
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-slate-400">{icon}</span>
-      <div>
-        <p className="text-sm font-semibold text-slate-900">{value}</p>
-        <p className="text-xs text-slate-500">{label}</p>
-      </div>
+    <div className={`card border ${ev.passed ? "border-slate-100" : "border-red-100 bg-red-50/30"}`}>
+      <button
+        className="w-full flex items-center justify-between p-4"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <div className="flex items-center gap-3">
+          <span className={ev.passed ? "text-slate-400" : "text-red-500"}>
+            {meta?.icon}
+          </span>
+          <span className="text-sm font-medium text-slate-800">
+            {meta?.label ?? ev.category}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <ScoreBar score={ev.score} passed={ev.passed} />
+          <span className={`text-sm font-bold ${scoreColor(ev.score)}`}>
+            {(ev.score * 100).toFixed(0)}
+          </span>
+          {ev.passed
+            ? <CheckCircle2 className="w-4 h-4 text-green-500" />
+            : <XCircle className="w-4 h-4 text-red-500" />}
+          {open
+            ? <ChevronDown className="w-4 h-4 text-slate-400" />
+            : <ChevronRight className="w-4 h-4 text-slate-400" />}
+        </div>
+      </button>
+      {open && ev.reasoning && (
+        <div className="px-4 pb-4 border-t border-slate-100 pt-3">
+          <p className="text-sm text-slate-600">{ev.reasoning}</p>
+        </div>
+      )}
     </div>
   );
 }
 
-function OverviewTab({ timeline }: { timeline: Timeline }) {
-  const { retrieval_candidates, memory_candidates, tool_calls, reasoning_steps } = timeline;
-  const selected = retrieval_candidates.filter((c) => c.selected);
-  const aclBlocked = retrieval_candidates.filter((c) => !c.acl_passed);
-  const staleMemory = memory_candidates.filter((m) => m.is_stale && m.selected);
-  const failedTools = tool_calls.filter((t) => t.status === "failure");
-
+function RetrievalTab({ candidates }: { candidates: RunTimeline["retrieval_candidates"] }) {
+  if (!candidates.length) {
+    return <div className="card p-8 text-center text-slate-500 text-sm">No retrieval candidates in this run.</div>;
+  }
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div className="card p-4">
-        <h3 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
-          <Database className="w-4 h-4 text-blue-600" /> Retrieval Summary
-        </h3>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between"><span className="text-slate-500">Total candidates</span><span className="font-medium">{retrieval_candidates.length}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Selected</span><span className="font-medium text-green-600">{selected.length}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">ACL blocked</span><span className={`font-medium ${aclBlocked.length > 0 ? "text-red-600" : "text-slate-900"}`}>{aclBlocked.length}</span></div>
-        </div>
-      </div>
-
-      <div className="card p-4">
-        <h3 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
-          <Brain className="w-4 h-4 text-purple-600" /> Memory Summary
-        </h3>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between"><span className="text-slate-500">Total memories</span><span className="font-medium">{memory_candidates.length}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Selected</span><span className="font-medium">{memory_candidates.filter((m) => m.selected).length}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Stale used</span><span className={`font-medium ${staleMemory.length > 0 ? "text-amber-600" : "text-slate-900"}`}>{staleMemory.length}</span></div>
-        </div>
-      </div>
-
-      <div className="card p-4">
-        <h3 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
-          <Wrench className="w-4 h-4 text-indigo-600" /> Tool Calls Summary
-        </h3>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between"><span className="text-slate-500">Total calls</span><span className="font-medium">{tool_calls.length}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Successful</span><span className="font-medium text-green-600">{tool_calls.filter((t) => t.status === "success").length}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Failed</span><span className={`font-medium ${failedTools.length > 0 ? "text-red-600" : "text-slate-900"}`}>{failedTools.length}</span></div>
-        </div>
-      </div>
-
-      <div className="card p-4">
-        <h3 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
-          <BookOpen className="w-4 h-4 text-orange-600" /> Trajectory Summary
-        </h3>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between"><span className="text-slate-500">Total steps</span><span className="font-medium">{reasoning_steps.length}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Total tokens</span><span className="font-medium">{reasoning_steps.reduce((s: number, r: any) => s + (r.tokens_used || 0), 0).toLocaleString()}</span></div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RetrievalTab({ candidates }: { candidates: any[] }) {
-  if (!candidates.length) return <EmptyState message="No retrieval candidates" />;
-
-  return (
-    <div className="space-y-3">
+    <div className="card divide-y divide-slate-100">
       {candidates.map((c, i) => (
-        <div key={c.id || i} className={`card p-4 ${!c.acl_passed ? "border-red-200 bg-red-50" : c.selected ? "border-green-200 bg-green-50" : ""}`}>
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-sm text-slate-900">{c.title || c.doc_id}</span>
-                {c.selected && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Selected</span>}
-                {!c.acl_passed && <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> ACL Blocked</span>}
-              </div>
-              <p className="text-xs text-slate-500 mt-1">Score: {c.score?.toFixed(3)} | Rank: #{c.rank || i + 1} | Method: {c.retrieval_method || "unknown"}</p>
-              {c.content_preview && <p className="text-xs text-slate-600 mt-2 line-clamp-2">{c.content_preview}</p>}
-              {c.acl_reason && <p className="text-xs text-red-600 mt-1">ACL reason: {c.acl_reason}</p>}
-              {c.rejection_reason && <p className="text-xs text-amber-600 mt-1">Rejected: {c.rejection_reason}</p>}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function MemoryTab({ candidates }: { candidates: any[] }) {
-  if (!candidates.length) return <EmptyState message="No memory candidates" />;
-
-  return (
-    <div className="space-y-3">
-      {candidates.map((m, i) => (
-        <div key={m.id || i} className={`card p-4 ${m.is_stale && m.selected ? "border-amber-200 bg-amber-50" : m.selected ? "border-green-200 bg-green-50" : ""}`}>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">{m.memory_type}</span>
-            {m.selected && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Selected</span>}
-            {m.is_stale && <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Stale</span>}
-          </div>
-          <p className="text-sm text-slate-700">{m.content}</p>
-          <p className="text-xs text-slate-500 mt-2">Relevance: {m.relevance_score?.toFixed(3)} | Recency: {m.recency_score?.toFixed(3)}</p>
-          {m.stale_reason && <p className="text-xs text-amber-600 mt-1">Stale reason: {m.stale_reason}</p>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ToolsTab({ calls }: { calls: any[] }) {
-  if (!calls.length) return <EmptyState message="No tool calls" />;
-
-  return (
-    <div className="space-y-3">
-      {calls.map((t, i) => (
-        <div key={t.id || i} className={`card p-4 ${t.status === "failure" ? "border-red-200 bg-red-50" : ""}`}>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="font-mono text-sm font-medium text-slate-900">{t.tool_name}</span>
-            <span className={`text-xs px-1.5 py-0.5 rounded ${t.status === "success" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{t.status}</span>
-            <span className="text-xs text-slate-400">Step {t.step_number}</span>
-            {t.requires_approval && <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Requires Approval</span>}
-          </div>
-          <div className="grid grid-cols-2 gap-4 mt-2">
-            <div>
-              <p className="text-xs text-slate-500 mb-1">Arguments</p>
-              <pre className="text-xs bg-slate-100 p-2 rounded overflow-x-auto">{JSON.stringify(t.tool_args, null, 2)}</pre>
-            </div>
-            {t.tool_result && (
-              <div>
-                <p className="text-xs text-slate-500 mb-1">Result</p>
-                <pre className="text-xs bg-slate-100 p-2 rounded overflow-x-auto">{JSON.stringify(t.tool_result, null, 2)}</pre>
-              </div>
+        <div key={i} className="flex items-start justify-between px-4 py-3 gap-4">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-slate-800 truncate">{c.title || c.doc_id}</p>
+            <p className="text-xs text-slate-500 mt-0.5 font-mono">{c.doc_id}</p>
+            {c.acl_reason && (
+              <p className="text-xs text-red-600 mt-0.5">ACL: {c.acl_reason}</p>
+            )}
+            {c.rejection_reason && (
+              <p className="text-xs text-amber-600 mt-0.5">Rejected: {c.rejection_reason}</p>
             )}
           </div>
-          {t.error_message && <p className="text-xs text-red-600 mt-2">Error: {t.error_message}</p>}
-          <p className="text-xs text-slate-400 mt-2">Latency: {t.latency_ms}ms</p>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-slate-500 font-mono">{c.score.toFixed(3)}</span>
+            {c.selected && <span className="badge-green">selected</span>}
+            {!c.acl_passed && <span className="badge-red">ACL blocked</span>}
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-function TrajectoryTab({ steps }: { steps: any[] }) {
-  if (!steps.length) return <EmptyState message="No reasoning steps recorded" />;
-
-  const typeColors: Record<string, string> = {
-    think: "bg-purple-100 text-purple-700",
-    retrieve: "bg-blue-100 text-blue-700",
-    remember: "bg-amber-100 text-amber-700",
-    tool_call: "bg-indigo-100 text-indigo-700",
-    tool_result: "bg-slate-100 text-slate-700",
-    generate: "bg-green-100 text-green-700",
-    decide: "bg-orange-100 text-orange-700",
-    act: "bg-red-100 text-red-700",
-  };
-
+function MemoryTab({ candidates }: { candidates: RunTimeline["memory_candidates"] }) {
+  if (!candidates.length) {
+    return <div className="card p-8 text-center text-slate-500 text-sm">No memory candidates in this run.</div>;
+  }
   return (
-    <div className="relative">
-      <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-200" />
-      <div className="space-y-4">
-        {steps.map((s, i) => (
-          <div key={s.id || i} className="relative flex gap-4 ml-2">
-            <div className="w-8 h-8 rounded-full bg-white border-2 border-slate-200 flex items-center justify-center z-10 flex-shrink-0">
-              <span className="text-xs font-bold text-slate-500">{s.step_number}</span>
-            </div>
-            <div className="card p-3 flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`text-xs px-1.5 py-0.5 rounded ${typeColors[s.step_type] || "bg-slate-100 text-slate-600"}`}>{s.step_type}</span>
-                <span className="text-xs text-slate-400">{s.latency_ms}ms | {s.tokens_used} tokens</span>
-              </div>
-              <p className="text-sm text-slate-700">{s.content}</p>
+    <div className="card divide-y divide-slate-100">
+      {candidates.map((m, i) => (
+        <div key={i} className="px-4 py-3">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs font-medium text-slate-600 uppercase">{m.memory_type}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">rel: {m.relevance_score.toFixed(2)}</span>
+              {m.selected && <span className="badge-green">used</span>}
+              {m.is_stale && <span className="badge-red">stale</span>}
             </div>
           </div>
-        ))}
-      </div>
+          <p className="text-sm text-slate-700">{m.content}</p>
+          {m.stale_reason && (
+            <p className="text-xs text-red-500 mt-1">Stale reason: {m.stale_reason}</p>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
 
-function EvaluationsTab({ evaluations }: { evaluations: any[] }) {
-  if (!evaluations.length) {
-    return (
-      <div className="text-center py-12">
-        <CheckCircle2 className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-        <p className="text-slate-500 text-sm">No evaluations yet. Click &quot;Run Evaluation&quot; to start.</p>
-      </div>
-    );
+function TraceTab({
+  steps,
+  toolCalls,
+}: {
+  steps: RunTimeline["reasoning_steps"];
+  toolCalls: RunTimeline["tool_calls"];
+}) {
+  if (!steps.length && !toolCalls.length) {
+    return <div className="card p-8 text-center text-slate-500 text-sm">No reasoning trace available.</div>;
   }
 
+  // Interleave steps and tool calls by step_number
+  type TraceItem =
+    | { kind: "step"; data: RunTimeline["reasoning_steps"][0] }
+    | { kind: "tool"; data: RunTimeline["tool_calls"][0] };
+
+  const items: TraceItem[] = [
+    ...steps.map((s) => ({ kind: "step" as const, data: s })),
+    ...toolCalls.map((t) => ({ kind: "tool" as const, data: t })),
+  ].sort((a, b) => a.data.step_number - b.data.step_number);
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {evaluations.map((ev, i) => (
-        <div key={ev.id || i} className={`card p-4 ${ev.passed ? "border-green-200" : "border-red-200"}`}>
-          <div className="flex items-center justify-between mb-2">
-            <span className="font-medium text-sm text-slate-900">{ev.category.replace(/_/g, " ")}</span>
-            <div className="flex items-center gap-2">
-              <ScoreBar score={ev.score} />
-              {ev.passed ? (
-                <CheckCircle2 className="w-4 h-4 text-green-600" />
-              ) : (
-                <XCircle className="w-4 h-4 text-red-600" />
+    <div className="space-y-2">
+      {items.map((item, i) => (
+        <div key={i} className="card px-4 py-3">
+          {item.kind === "step" ? (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs font-medium text-brand-600 uppercase">{item.data.step_type}</span>
+                <span className="text-xs text-slate-400">step {item.data.step_number}</span>
+                {item.data.tokens_used > 0 && (
+                  <span className="text-xs text-slate-400">{item.data.tokens_used} tokens</span>
+                )}
+              </div>
+              <p className="text-sm text-slate-700">{item.data.content}</p>
+            </div>
+          ) : (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Wrench className="w-3 h-3 text-slate-400" />
+                <span className="text-xs font-medium text-slate-700">{item.data.tool_name}</span>
+                <span className="text-xs text-slate-400">step {item.data.step_number}</span>
+                <StatusBadge status={item.data.status} />
+                <span className="text-xs text-slate-400">{item.data.latency_ms}ms</span>
+              </div>
+              {item.data.error_message && (
+                <p className="text-xs text-red-600">{item.data.error_message}</p>
               )}
             </div>
-          </div>
-          {ev.reasoning && (
-            <p className="text-xs text-slate-600 mt-1">{ev.reasoning}</p>
           )}
-          <p className="text-xs text-slate-400 mt-2">
-            {ev.evaluator_name} {ev.evaluator_version} | {ev.eval_latency_ms}ms
-          </p>
         </div>
       ))}
     </div>
   );
 }
 
-function ScoreBar({ score }: { score: number }) {
-  const pct = Math.round(score * 100);
-  const color = pct >= 80 ? "bg-green-500" : pct >= 60 ? "bg-amber-500" : "bg-red-500";
+function ScoreBar({ score, passed }: { score: number; passed: boolean }) {
   return (
-    <div className="flex items-center gap-2">
-      <div className="w-16 h-2 bg-slate-100 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs font-medium text-slate-700">{pct}%</span>
+    <div className="w-20 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+      <div
+        className={`h-full rounded-full ${passed ? "bg-green-500" : score > 0.5 ? "bg-amber-500" : "bg-red-500"}`}
+        style={{ width: `${Math.round(score * 100)}%` }}
+      />
     </div>
   );
 }
 
-function EmptyState({ message }: { message: string }) {
+function scoreColor(score: number): string {
+  if (score >= 0.8) return "text-green-600";
+  if (score >= 0.6) return "text-amber-600";
+  return "text-red-600";
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    completed: "bg-green-100 text-green-700",
+    success:   "bg-green-100 text-green-700",
+    failed:    "bg-red-100 text-red-700",
+    failure:   "bg-red-100 text-red-700",
+    running:   "bg-blue-100 text-blue-700",
+    pending:   "bg-slate-100 text-slate-600",
+    timeout:   "bg-amber-100 text-amber-700",
+  };
   return (
-    <div className="text-center py-12">
-      <EyeOff className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-      <p className="text-slate-500 text-sm">{message}</p>
-    </div>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${styles[status] ?? styles.pending}`}>
+      {status}
+    </span>
   );
 }

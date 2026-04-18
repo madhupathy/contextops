@@ -82,7 +82,7 @@ func setupRouter(pool *db.Pool) *gin.Engine {
 	h := handler.New(pool)
 
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "contextops-api", "version": "0.1.0"})
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "contextops-api", "version": "0.2.0"})
 	})
 
 	v1 := r.Group("/api/v1")
@@ -113,6 +113,7 @@ func setupRouter(pool *db.Pool) *gin.Engine {
 		// Evaluations
 		v1.POST("/runs/:id/evaluate", h.TriggerEvaluation)
 		v1.GET("/runs/:id/evaluations", h.GetRunEvaluations)
+		v1.GET("/runs/:id/eval-summary", h.GetRunEvalSummary)
 		v1.GET("/evaluations", h.ListEvaluations)
 
 		// Benchmarks

@@ -252,7 +252,7 @@ CREATE TABLE evaluations (
         'answer_correctness', 'groundedness', 'retrieval_quality',
         'citation_precision', 'permission_safety', 'memory_utility',
         'tool_correctness', 'trajectory_quality', 'task_completion',
-        'cost_efficiency'
+        'cost_efficiency', 'context_poisoning', 'session_coherence'
     )),
     
     -- Result
@@ -272,6 +272,7 @@ CREATE TABLE evaluations (
 CREATE INDEX idx_evaluations_run ON evaluations(run_id);
 CREATE INDEX idx_evaluations_tenant ON evaluations(tenant_id);
 CREATE INDEX idx_evaluations_category ON evaluations(tenant_id, category);
+CREATE UNIQUE INDEX idx_evaluations_run_category ON evaluations(run_id, category);
 
 -- ============================================================
 -- BENCHMARK SUITES

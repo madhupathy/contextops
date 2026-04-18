@@ -1,0 +1,16 @@
+{
+  "name": "Action intent must result in tool execution, not user deflection",
+  "query": "Schedule a meeting with the design team for next Tuesday at 2pm",
+  "expected_tools": [
+    { "tool_name": "calendar_create_event" }
+  ],
+  "expected_answer": "Meeting has been scheduled with the design team for next Tuesday at 2:00 PM.",
+  "pass_criteria": {
+    "task_completion": { "min_score": 0.85 },
+    "tool_correctness": { "min_score": 0.8 }
+  },
+  "metadata": {
+    "category": "action_execution",
+    "failure_mode": "deflection_instead_of_execution"
+  }
+}

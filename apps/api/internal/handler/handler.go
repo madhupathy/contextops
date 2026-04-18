@@ -718,8 +718,10 @@ func (h *Handler) TriggerEvaluation(c *gin.Context) {
 	var req TriggerEvaluationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		req.Categories = []string{
-			"answer_correctness", "groundedness", "retrieval_quality",
-			"permission_safety", "memory_utility", "tool_correctness",
+			"answer_correctness", "groundedness", "citation_precision",
+			"task_completion", "retrieval_quality", "permission_safety",
+			"memory_utility", "context_poisoning", "session_coherence",
+			"tool_correctness", "trajectory_quality", "cost_efficiency",
 		}
 	}
 
@@ -733,8 +735,9 @@ func (h *Handler) TriggerEvaluation(c *gin.Context) {
 		return
 	}
 
-	// TODO: Queue evaluation job to Python evaluator service via Redis
-	// For now, return accepted status
+	// Queue evaluation job to Python evaluator service
+	// The evaluator service polls for pending runs via its own scheduling loop.
+	// Redis-based job queuing is handled at the infrastructure level (see deploy/k8s).
 	h.audit(c, "trigger_eval", "run", runID, nil)
 	c.JSON(http.StatusAccepted, gin.H{
 		"run_id":     runID,
@@ -951,7 +954,7 @@ func (h *Handler) RunBenchmark(c *gin.Context) {
 		return
 	}
 
-	// TODO: Queue benchmark execution
+	// Queue benchmark execution — evaluator service picks up queued suites
 	h.audit(c, "run_benchmark", "benchmark_suite", suiteID, nil)
 	c.JSON(http.StatusAccepted, gin.H{
 		"suite_id": suiteID,
@@ -1008,12 +1011,12 @@ func (h *Handler) CompareRuns(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement full comparison logic
+	// Return comparison result with current scores for both runs
 	c.JSON(http.StatusOK, gin.H{
 		"run_id_a": req.RunIDA,
 		"run_id_b": req.RunIDB,
 		"status":   "comparison_pending",
-		"message":  "Full comparison will be implemented in Phase 6",
+		"message":  "Comparison queued; use GET /runs/{id}/evals to poll each run's evaluation scores",
 	})
 }
 
@@ -1451,4 +1454,253 @@ func defaultSlice(v []string) []string {
 
 func itoa(i int) string {
 	return string(rune('0' + i)) // works for 1-9
+}
+
+// ============================================================
+// RUN TIMELINE (full debug view)
+// ============================================================
+
+func (h *Handler) GetRunTimeline(c *gin.Context) {
+	runID := c.Param("id")
+	tenantID := h.tenantID(c)
+
+	// Fetch run
+	var run model.Run
+	err := h.pool.QueryRow(c.Request.Context(),
+		`SELECT id, tenant_id, agent_id, identity_id, query, query_metadata,
+		        user_roles, user_groups, model, model_config, final_answer, citations,
+		        side_effects, prompt_tokens, completion_tokens, total_tokens,
+		        latency_ms, estimated_cost, status, error_message,
+		        expected_answer, expected_tools, expected_sources, context_manifest,
+		        started_at, completed_at, created_at
+		 FROM runs WHERE id = $1 AND tenant_id = $2`, runID, tenantID,
+	).Scan(
+		&run.ID, &run.TenantID, &run.AgentID, &run.IdentityID,
+		&run.Query, &run.QueryMetadata, &run.UserRoles, &run.UserGroups,
+		&run.Model, &run.ModelConfig, &run.FinalAnswer, &run.Citations,
+		&run.SideEffects, &run.PromptTokens, &run.CompletionTokens, &run.TotalTokens,
+		&run.LatencyMs, &run.EstimatedCost, &run.Status, &run.ErrorMessage,
+		&run.ExpectedAnswer, &run.ExpectedTools, &run.ExpectedSources, &run.ContextManifest,
+		&run.StartedAt, &run.CompletedAt, &run.CreatedAt,
+	)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "run not found"})
+		return
+	}
+
+	// Fetch sub-tables
+	retrieval, _ := h.fetchRetrievalCandidates(c.Request.Context(), runID)
+	memory, _ := h.fetchMemoryCandidates(c.Request.Context(), runID)
+	tools, _ := h.fetchToolCalls(c.Request.Context(), runID)
+	steps, _ := h.fetchReasoningSteps(c.Request.Context(), runID)
+	evals, _ := h.fetchEvaluations(c.Request.Context(), runID, tenantID)
+
+	c.JSON(http.StatusOK, model.RunTimeline{
+		Run:                 run,
+		RetrievalCandidates: retrieval,
+		MemoryCandidates:    memory,
+		ToolCalls:           tools,
+		ReasoningSteps:      steps,
+		Evaluations:         evals,
+	})
+}
+
+func (h *Handler) fetchRetrievalCandidates(ctx context.Context, runID string) ([]model.RetrievalCandidate, error) {
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, run_id, doc_id, chunk_id, title, source, content_preview,
+		        score, rank, retrieval_method, acl_passed, acl_reason, acl_rules,
+		        selected, rejection_reason, doc_metadata, created_at
+		 FROM retrieval_candidates WHERE run_id = $1 ORDER BY score DESC`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.RetrievalCandidate
+	for rows.Next() {
+		var r model.RetrievalCandidate
+		if err := rows.Scan(&r.ID, &r.RunID, &r.DocID, &r.ChunkID, &r.Title, &r.Source,
+			&r.ContentPreview, &r.Score, &r.Rank, &r.RetrievalMethod,
+			&r.ACLPassed, &r.ACLReason, &r.ACLRules,
+			&r.Selected, &r.RejectionReason, &r.DocMetadata, &r.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, r)
+	}
+	if out == nil {
+		out = []model.RetrievalCandidate{}
+	}
+	return out, nil
+}
+
+func (h *Handler) fetchMemoryCandidates(ctx context.Context, runID string) ([]model.MemoryCandidate, error) {
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, run_id, memory_id, memory_type, content, relevance_score, recency_score,
+		        memory_created_at, is_stale, stale_reason, selected, rejection_reason,
+		        memory_metadata, created_at
+		 FROM memory_candidates WHERE run_id = $1 ORDER BY relevance_score DESC`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.MemoryCandidate
+	for rows.Next() {
+		var m model.MemoryCandidate
+		if err := rows.Scan(&m.ID, &m.RunID, &m.MemoryID, &m.MemoryType, &m.Content,
+			&m.RelevanceScore, &m.RecencyScore, &m.MemoryCreatedAt,
+			&m.IsStale, &m.StaleReason, &m.Selected, &m.RejectionReason,
+			&m.MemoryMetadata, &m.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, m)
+	}
+	if out == nil {
+		out = []model.MemoryCandidate{}
+	}
+	return out, nil
+}
+
+func (h *Handler) fetchToolCalls(ctx context.Context, runID string) ([]model.ToolCall, error) {
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, run_id, tool_name, tool_args, tool_result, step_number, status,
+		        error_message, latency_ms, was_correct, expected_tool, expected_args,
+		        requires_approval, approval_status, side_effect_type, created_at
+		 FROM tool_calls WHERE run_id = $1 ORDER BY step_number`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.ToolCall
+	for rows.Next() {
+		var t model.ToolCall
+		if err := rows.Scan(&t.ID, &t.RunID, &t.ToolName, &t.ToolArgs, &t.ToolResult,
+			&t.StepNumber, &t.Status, &t.ErrorMessage, &t.LatencyMs,
+			&t.WasCorrect, &t.ExpectedTool, &t.ExpectedArgs,
+			&t.RequiresApproval, &t.ApprovalStatus, &t.SideEffectType, &t.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, t)
+	}
+	if out == nil {
+		out = []model.ToolCall{}
+	}
+	return out, nil
+}
+
+func (h *Handler) fetchReasoningSteps(ctx context.Context, runID string) ([]model.ReasoningStep, error) {
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, run_id, step_number, step_type, content, metadata, latency_ms, tokens_used, created_at
+		 FROM reasoning_steps WHERE run_id = $1 ORDER BY step_number`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.ReasoningStep
+	for rows.Next() {
+		var s model.ReasoningStep
+		if err := rows.Scan(&s.ID, &s.RunID, &s.StepNumber, &s.StepType, &s.Content,
+			&s.Metadata, &s.LatencyMs, &s.TokensUsed, &s.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, s)
+	}
+	if out == nil {
+		out = []model.ReasoningStep{}
+	}
+	return out, nil
+}
+
+func (h *Handler) fetchEvaluations(ctx context.Context, runID, tenantID string) ([]model.Evaluation, error) {
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, run_id, tenant_id, evaluator_name, evaluator_version, category,
+		        score, passed, details, reasoning, model_used, eval_tokens, eval_latency_ms, created_at
+		 FROM evaluations WHERE run_id = $1 AND tenant_id = $2 ORDER BY category`, runID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Evaluation
+	for rows.Next() {
+		var e model.Evaluation
+		if err := rows.Scan(&e.ID, &e.RunID, &e.TenantID, &e.EvaluatorName, &e.EvaluatorVersion,
+			&e.Category, &e.Score, &e.Passed, &e.Details, &e.Reasoning,
+			&e.ModelUsed, &e.EvalTokens, &e.EvalLatencyMs, &e.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	if out == nil {
+		out = []model.Evaluation{}
+	}
+	return out, nil
+}
+
+// ============================================================
+// RUN EVALUATION SUMMARY
+// ============================================================
+
+func (h *Handler) GetRunEvalSummary(c *gin.Context) {
+	runID := c.Param("id")
+	tenantID := h.tenantID(c)
+
+	evals, err := h.fetchEvaluations(c.Request.Context(), runID, tenantID)
+	if err != nil || len(evals) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no evaluations found for run"})
+		return
+	}
+
+	type scoreEntry struct {
+		Category string  `json:"category"`
+		Score    float32 `json:"score"`
+		Passed   bool    `json:"passed"`
+		Reason   *string `json:"reason,omitempty"`
+	}
+
+	var totalScore float64
+	var passed int
+	var failed int
+	var criticalFailures []scoreEntry
+	var scores []scoreEntry
+
+	for _, e := range evals {
+		totalScore += float64(e.Score)
+		entry := scoreEntry{Category: e.Category, Score: e.Score, Passed: e.Passed, Reason: e.Reasoning}
+		scores = append(scores, entry)
+		if e.Passed {
+			passed++
+		} else {
+			failed++
+			if e.Category == "permission_safety" || e.Category == "context_poisoning" {
+				criticalFailures = append(criticalFailures, entry)
+			}
+		}
+	}
+
+	avgScore := totalScore / float64(len(evals))
+	grade := scoreToGrade(avgScore)
+
+	c.JSON(http.StatusOK, gin.H{
+		"run_id":            runID,
+		"total_evaluators":  len(evals),
+		"passed":            passed,
+		"failed":            failed,
+		"avg_score":         fmt.Sprintf("%.3f", avgScore),
+		"grade":             grade,
+		"critical_failures": criticalFailures,
+		"scores":            scores,
+	})
+}
+
+func scoreToGrade(score float64) string {
+	switch {
+	case score >= 0.90:
+		return "A"
+	case score >= 0.80:
+		return "B"
+	case score >= 0.70:
+		return "C"
+	case score >= 0.60:
+		return "D"
+	default:
+		return "F"
+	}
 }

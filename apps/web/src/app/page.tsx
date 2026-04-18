@@ -9,10 +9,14 @@ import {
   Clock,
   Cpu,
   DollarSign,
-  Search,
+  MemoryStick,
   Shield,
+  Star,
+  Wrench,
   XCircle,
   Zap,
+  FileText,
+  Lock,
 } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -24,6 +28,7 @@ interface Run {
   model: string | null;
   total_tokens: number;
   latency_ms: number;
+  estimated_cost: number;
   created_at: string;
 }
 
@@ -33,127 +38,160 @@ interface Stats {
   failed: number;
   avg_latency: number;
   avg_tokens: number;
+  total_cost: number;
 }
+
+const EVAL_GROUPS = [
+  {
+    label: "Core Quality",
+    color: "text-green-600",
+    items: [
+      { key: "answer_correctness", label: "Answer Correctness", icon: <CheckCircle2 className="w-4 h-4" /> },
+      { key: "groundedness",       label: "Groundedness",        icon: <FileText className="w-4 h-4" /> },
+      { key: "citation_precision", label: "Citation Precision",  icon: <Star className="w-4 h-4" /> },
+      { key: "task_completion",    label: "Task Completion",     icon: <Zap className="w-4 h-4" /> },
+    ],
+  },
+  {
+    label: "Retrieval Pipeline",
+    color: "text-blue-600",
+    items: [
+      { key: "retrieval_quality", label: "Retrieval Quality",  icon: <BarChart3 className="w-4 h-4" /> },
+      { key: "permission_safety", label: "Permission Safety",  icon: <Shield className="w-4 h-4" /> },
+    ],
+  },
+  {
+    label: "Memory & Context",
+    color: "text-purple-600",
+    items: [
+      { key: "memory_utility",    label: "Memory Utility",     icon: <MemoryStick className="w-4 h-4" /> },
+      { key: "context_poisoning", label: "Context Poisoning",  icon: <AlertTriangle className="w-4 h-4" /> },
+      { key: "session_coherence", label: "Session Coherence",  icon: <Lock className="w-4 h-4" /> },
+    ],
+  },
+  {
+    label: "Agent Behaviour",
+    color: "text-indigo-600",
+    items: [
+      { key: "tool_correctness",  label: "Tool Correctness",   icon: <Wrench className="w-4 h-4" /> },
+      { key: "trajectory_quality",label: "Trajectory Quality", icon: <Activity className="w-4 h-4" /> },
+    ],
+  },
+  {
+    label: "Cost & Performance",
+    color: "text-emerald-600",
+    items: [
+      { key: "cost_efficiency", label: "Cost Efficiency", icon: <DollarSign className="w-4 h-4" /> },
+    ],
+  },
+];
 
 export default function Dashboard() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [stats, setStats] = useState<Stats>({
-    total_runs: 0,
-    completed: 0,
-    failed: 0,
-    avg_latency: 0,
-    avg_tokens: 0,
+    total_runs: 0, completed: 0, failed: 0,
+    avg_latency: 0, avg_tokens: 0, total_cost: 0,
   });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
-
-  async function fetchDashboardData() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/runs`);
-      if (res.ok) {
-        const data: Run[] = await res.json();
+    fetch(`${API_URL}/api/v1/runs`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: Run[]) => {
         setRuns(data);
-
         const completed = data.filter((r) => r.status === "completed").length;
         const failed = data.filter((r) => r.status === "failed").length;
-        const avgLatency =
-          data.length > 0
-            ? Math.round(data.reduce((sum, r) => sum + (r.latency_ms || 0), 0) / data.length)
-            : 0;
-        const avgTokens =
-          data.length > 0
-            ? Math.round(data.reduce((sum, r) => sum + (r.total_tokens || 0), 0) / data.length)
-            : 0;
-
+        const totalCost = data.reduce((s, r) => s + (r.estimated_cost || 0), 0);
         setStats({
           total_runs: data.length,
           completed,
           failed,
-          avg_latency: avgLatency,
-          avg_tokens: avgTokens,
+          avg_latency: data.length ? Math.round(data.reduce((s, r) => s + (r.latency_ms || 0), 0) / data.length) : 0,
+          avg_tokens: data.length ? Math.round(data.reduce((s, r) => s + (r.total_tokens || 0), 0) / data.length) : 0,
+          total_cost: totalCost,
         });
-      }
-    } catch (e) {
-      console.error("Failed to fetch dashboard data:", e);
-    } finally {
-      setLoading(false);
-    }
-  }
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Monitor your AI agent runs, evaluations, and benchmarks
+          Full-stack AI agent evaluation — retrieval, memory, context, tools, cost
         </p>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <StatCard
-          icon={<Activity className="w-5 h-5 text-brand-600" />}
-          label="Total Runs"
-          value={stats.total_runs.toString()}
-        />
-        <StatCard
-          icon={<CheckCircle2 className="w-5 h-5 text-green-600" />}
-          label="Completed"
-          value={stats.completed.toString()}
-        />
-        <StatCard
-          icon={<XCircle className="w-5 h-5 text-red-600" />}
-          label="Failed"
-          value={stats.failed.toString()}
-        />
-        <StatCard
-          icon={<Clock className="w-5 h-5 text-amber-600" />}
-          label="Avg Latency"
-          value={`${stats.avg_latency}ms`}
-        />
-        <StatCard
-          icon={<Cpu className="w-5 h-5 text-purple-600" />}
-          label="Avg Tokens"
-          value={stats.avg_tokens.toLocaleString()}
-        />
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        {[
+          { icon: <Activity className="w-5 h-5 text-brand-600" />, label: "Total Runs", value: stats.total_runs.toString() },
+          { icon: <CheckCircle2 className="w-5 h-5 text-green-600" />, label: "Completed", value: stats.completed.toString() },
+          { icon: <XCircle className="w-5 h-5 text-red-600" />, label: "Failed", value: stats.failed.toString() },
+          { icon: <Clock className="w-5 h-5 text-amber-600" />, label: "Avg Latency", value: `${stats.avg_latency}ms` },
+          { icon: <Cpu className="w-5 h-5 text-purple-600" />, label: "Avg Tokens", value: stats.avg_tokens.toLocaleString() },
+          { icon: <DollarSign className="w-5 h-5 text-emerald-600" />, label: "Total Cost", value: `$${stats.total_cost.toFixed(3)}` },
+        ].map((s) => (
+          <div key={s.label} className="card p-4">
+            <div className="flex items-center gap-2">
+              {s.icon}
+              <div>
+                <p className="text-xl font-bold text-slate-900">{s.value}</p>
+                <p className="text-xs text-slate-500">{s.label}</p>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
 
-      {/* Evaluation Categories */}
+      {/* Evaluator grid */}
       <div className="card p-6">
-        <h2 className="text-lg font-semibold text-slate-900 mb-4">Evaluation Categories</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <CategoryCard icon={<CheckCircle2 />} name="Answer Correctness" color="text-green-600" />
-          <CategoryCard icon={<Search />} name="Retrieval Quality" color="text-blue-600" />
-          <CategoryCard icon={<Shield />} name="Permission Safety" color="text-red-600" />
-          <CategoryCard icon={<BarChart3 />} name="Groundedness" color="text-purple-600" />
-          <CategoryCard icon={<Zap />} name="Memory Utility" color="text-amber-600" />
-          <CategoryCard icon={<Activity />} name="Tool Correctness" color="text-indigo-600" />
-          <CategoryCard icon={<AlertTriangle />} name="Trajectory Quality" color="text-orange-600" />
-          <CategoryCard icon={<DollarSign />} name="Cost Efficiency" color="text-emerald-600" />
+        <h2 className="text-base font-semibold text-slate-900 mb-4">
+          12 Evaluators — Full AI Agent Quality Stack
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          {EVAL_GROUPS.map((group) => (
+            <div key={group.label}>
+              <p className={`text-xs font-semibold uppercase tracking-wider mb-2 ${group.color}`}>
+                {group.label}
+              </p>
+              <div className="space-y-1.5">
+                {group.items.map((item) => (
+                  <div
+                    key={item.key}
+                    className="flex items-center gap-2 px-3 py-2 rounded-md border border-slate-100 hover:border-slate-200 bg-slate-50 hover:bg-white transition-colors"
+                  >
+                    <span className={group.color}>{item.icon}</span>
+                    <span className="text-xs font-medium text-slate-700">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Recent Runs */}
+      {/* Recent runs */}
       <div className="card">
-        <div className="px-6 py-4 border-b border-slate-200">
-          <h2 className="text-lg font-semibold text-slate-900">Recent Runs</h2>
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-slate-900">Recent Runs</h2>
+          <a href="/runs" className="text-xs text-brand-600 hover:text-brand-700">View all →</a>
         </div>
         {loading ? (
-          <div className="p-8 text-center text-slate-500">Loading...</div>
+          <div className="p-8 text-center text-slate-500 text-sm">Loading...</div>
         ) : runs.length === 0 ? (
           <div className="p-8 text-center">
             <Activity className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm">No runs yet. Ingest your first agent run via the API.</p>
-            <code className="text-xs bg-slate-100 px-3 py-2 rounded mt-3 inline-block">
+            <p className="text-slate-500 text-sm">No runs yet.</p>
+            <code className="text-xs bg-slate-100 px-3 py-2 rounded mt-3 inline-block text-slate-600">
               POST /api/v1/runs
             </code>
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {runs.slice(0, 10).map((run) => (
+            {runs.slice(0, 8).map((run) => (
               <a
                 key={run.id}
                 href={`/runs/${run.id}`}
@@ -162,8 +200,7 @@ export default function Dashboard() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-slate-900 truncate">{run.query}</p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {run.model || "unknown"} &middot; {run.total_tokens} tokens &middot;{" "}
-                    {run.latency_ms}ms
+                    {run.model || "—"} · {(run.total_tokens || 0).toLocaleString()} tokens · {run.latency_ms}ms
                   </p>
                 </div>
                 <div className="flex items-center gap-3 ml-4">
@@ -181,59 +218,16 @@ export default function Dashboard() {
   );
 }
 
-function StatCard({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="card p-4">
-      <div className="flex items-center gap-3">
-        {icon}
-        <div>
-          <p className="text-2xl font-bold text-slate-900">{value}</p>
-          <p className="text-xs text-slate-500">{label}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CategoryCard({
-  icon,
-  name,
-  color,
-}: {
-  icon: React.ReactNode;
-  name: string;
-  color: string;
-}) {
-  return (
-    <div className="flex items-center gap-2 p-3 rounded-lg border border-slate-100 hover:border-slate-200 transition-colors">
-      <span className={color}>{icon}</span>
-      <span className="text-sm font-medium text-slate-700">{name}</span>
-    </div>
-  );
-}
-
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     completed: "bg-green-100 text-green-700",
-    failed: "bg-red-100 text-red-700",
-    running: "bg-blue-100 text-blue-700",
-    pending: "bg-slate-100 text-slate-600",
-    timeout: "bg-amber-100 text-amber-700",
+    failed:    "bg-red-100 text-red-700",
+    running:   "bg-blue-100 text-blue-700",
+    pending:   "bg-slate-100 text-slate-600",
+    timeout:   "bg-amber-100 text-amber-700",
   };
   return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-        styles[status] || styles.pending
-      }`}
-    >
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${styles[status] || styles.pending}`}>
       {status}
     </span>
   );

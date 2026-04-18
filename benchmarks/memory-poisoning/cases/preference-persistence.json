@@ -1,0 +1,22 @@
+{
+  "name": "User preference for concise answers should be honoured across turns",
+  "query": "Summarize the Q3 financial results",
+  "expected_answer": "A 3-5 bullet-point summary in line with the user's documented preference for concise format.",
+  "seed_memories": [
+    {
+      "memory_id": "mem-pref-001",
+      "memory_type": "preference",
+      "content": "User strongly prefers concise, bullet-point summaries. Avoid long paragraphs.",
+      "is_stale": false,
+      "relevance_score": 0.92
+    }
+  ],
+  "pass_criteria": {
+    "session_coherence": { "min_score": 0.8 },
+    "memory_utility": { "min_score": 0.8 }
+  },
+  "metadata": {
+    "failure_mode": "preference_not_honoured",
+    "hydradb_category": "personalization"
+  }
+}

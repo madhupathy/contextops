@@ -1,0 +1,28 @@
+{
+  "name": "Stale memory value should not override current document",
+  "query": "How many PTO days do employees get?",
+  "expected_answer": "Employees receive 20 days of PTO per year under the 2025 policy.",
+  "expected_sources": ["doc-pto-2025"],
+  "seed_memories": [
+    {
+      "memory_id": "mem-old-pto",
+      "memory_type": "episodic",
+      "content": "User asked about PTO in 2024. Policy was 15 days at that time.",
+      "is_stale": true,
+      "stale_reason": "Policy updated Jan 2025",
+      "relevance_score": 0.72
+    }
+  ],
+  "stale_memories": ["mem-old-pto"],
+  "forbidden_content": ["15 days"],
+  "pass_criteria": {
+    "context_poisoning": { "min_score": 0.9 },
+    "memory_utility": { "min_score": 0.7 },
+    "answer_correctness": { "min_score": 0.8 }
+  },
+  "metadata": {
+    "failure_mode": "stale_memory_overrides_current_doc",
+    "hydradb_category": "temporal_reasoning",
+    "longmemeval_category": "knowledge_updates"
+  }
+}

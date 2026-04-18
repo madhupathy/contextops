@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  # ── Go API ────────────────────────────────────────────
+  # ── Go API ─────────────────────────────────────────────────
   api:
     name: API (Go)
     runs-on: ubuntu-latest
@@ -24,7 +24,7 @@ jobs:
       - run: go build -o /dev/null .
       - run: go test ./... -v -race
 
-  # ── Go CLI ────────────────────────────────────────────
+  # ── Go CLI ─────────────────────────────────────────────────
   cli:
     name: CLI (Go)
     runs-on: ubuntu-latest
@@ -39,10 +39,10 @@ jobs:
       - run: go mod download
       - run: go vet ./...
       - run: go build -o contextops .
-      - name: Verify CLI help
+      - name: Verify CLI starts
         run: ./contextops --help
 
-  # ── Python Evaluator ──────────────────────────────────
+  # ── Python Evaluator ───────────────────────────────────────
   evaluator:
     name: Evaluator (Python)
     runs-on: ubuntu-latest
@@ -55,15 +55,37 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: python -m py_compile main.py
-      - run: python -m py_compile models.py
-      - name: Compile all evaluators
+      - name: Compile all modules
         run: |
+          python -m py_compile main.py
+          python -m py_compile models.py
           for f in evaluators/*.py; do
             python -m py_compile "$f"
+            echo "OK: $f"
           done
+      - name: Verify all 12 evaluators register
+        run: |
+          python -c "
+          from evaluators.registry import EvaluatorRegistry
+          r = EvaluatorRegistry()
+          evals = r.list_evaluators()
+          assert len(evals) == 12, f'Expected 12 evaluators, got {len(evals)}: {[e[\"category\"] for e in evals]}'
+          print(f'OK: {len(evals)} evaluators registered')
+          for e in evals:
+              print(f'  - {e[\"category\"]}')
+          "
+      - name: Verify profile categories
+        run: |
+          python -c "
+          from evaluators.registry import EvaluatorRegistry
+          r = EvaluatorRegistry()
+          for profile in ('rag', 'agent', 'memory', 'enterprise', 'full'):
+              cats = r.categories_for_intent(profile)
+              assert len(cats) > 0, f'Profile {profile} has no categories'
+              print(f'Profile {profile}: {cats}')
+          "
 
-  # ── Trace Schema Validation ───────────────────────────
+  # ── Trace Schema Validation ────────────────────────────────
   schema:
     name: Trace Schema
     runs-on: ubuntu-latest
@@ -84,7 +106,34 @@ jobs:
               print(f'VALID: {f}')
           "
 
-  # ── Docker Build ──────────────────────────────────────
+  # ── Benchmark Cases Validation ─────────────────────────────
+  benchmarks:
+    name: Benchmark Cases
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate benchmark case JSON
+        run: |
+          python -c "
+          import json, glob, sys
+          errors = []
+          for f in glob.glob('benchmarks/**/cases/*.json', recursive=True):
+              try:
+                  case = json.load(open(f))
+                  assert 'query' in case, f'{f}: missing query field'
+                  assert 'pass_criteria' in case, f'{f}: missing pass_criteria'
+                  print(f'VALID: {f}')
+              except Exception as e:
+                  errors.append(f'{f}: {e}')
+          if errors:
+              for e in errors: print(f'ERROR: {e}', file=sys.stderr)
+              sys.exit(1)
+          "
+
+  # ── Docker Build ───────────────────────────────────────────
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
@@ -97,7 +146,7 @@ jobs:
       - name: Build CLI image
         run: docker build -t contextops/cli:test apps/cli/
 
-  # ── Helm Lint ─────────────────────────────────────────
+  # ── Helm Lint ──────────────────────────────────────────────
   helm:
     name: Helm Lint
     runs-on: ubuntu-latest
@@ -106,7 +155,7 @@ jobs:
       - uses: azure/setup-helm@v4
       - run: helm lint deploy/k8s/helm/contextops/
 
-  # ── Gate Check (integration) ──────────────────────────
+  # ── Gate Check (integration) ───────────────────────────────
   gate:
     name: Gate Check
     needs: [api, cli, evaluator]

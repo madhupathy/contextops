@@ -15,24 +15,42 @@
     "user": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "role": { "type": "string" },
-        "groups": { "type": "array", "items": { "type": "string" } }
+        "id": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "agent": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "version": { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
       }
     },
     "input": {
       "type": "object",
       "properties": {
-        "query": { "type": "string", "description": "The user's query or instruction" }
+        "query": {
+          "type": "string",
+          "description": "The user's query or instruction"
+        }
       },
-      "required": ["query"]
+      "required": [
+        "query"
+      ]
     },
     "retrieval": {
       "type": "object",
@@ -42,19 +60,35 @@
           "items": {
             "type": "object",
             "properties": {
-              "doc_id": { "type": "string" },
-              "title": { "type": "string" },
-              "score": { "type": "number" },
-              "acl_passed": { "type": "boolean" },
-              "acl_reason": { "type": "string" },
-              "selected": { "type": "boolean" }
+              "doc_id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "score": {
+                "type": "number"
+              },
+              "acl_passed": {
+                "type": "boolean"
+              },
+              "acl_reason": {
+                "type": "string"
+              },
+              "selected": {
+                "type": "boolean"
+              }
             },
-            "required": ["doc_id"]
+            "required": [
+              "doc_id"
+            ]
           }
         },
         "selected": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -66,21 +100,57 @@
           "items": {
             "type": "object",
             "properties": {
-              "memory_id": { "type": "string" },
-              "type": { "type": "string", "enum": ["conversation", "episodic", "semantic", "entity", "preference", "task"] },
-              "summary": { "type": "string" },
-              "content": { "type": "string" },
-              "relevance_score": { "type": "number" },
-              "is_stale": { "type": "boolean" },
-              "stale_reason": { "type": "string" },
-              "selected": { "type": "boolean" }
+              "memory_id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "conversation",
+                  "episodic",
+                  "semantic",
+                  "entity",
+                  "preference",
+                  "task"
+                ]
+              },
+              "summary": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "relevance_score": {
+                "type": "number"
+              },
+              "is_stale": {
+                "type": "boolean"
+              },
+              "stale_reason": {
+                "type": "string"
+              },
+              "selected": {
+                "type": "boolean"
+              },
+              "source_doc_id": {
+                "type": "string",
+                "description": "Original document this memory was extracted from"
+              },
+              "source_acl_blocked": {
+                "type": "boolean",
+                "description": "Whether the source document is ACL-restricted"
+              }
             },
-            "required": ["memory_id"]
+            "required": [
+              "memory_id"
+            ]
           }
         },
         "selected": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -92,9 +162,19 @@
           "items": {
             "type": "object",
             "properties": {
-              "doc_id": { "type": "string" },
-              "result": { "type": "string", "enum": ["passed", "filtered"] },
-              "reason": { "type": "string" }
+              "doc_id": {
+                "type": "string"
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "filtered"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
             }
           }
         }
@@ -105,13 +185,29 @@
       "items": {
         "type": "object",
         "properties": {
-          "name": { "type": "string" },
-          "args": { "type": "object" },
-          "status": { "type": "string", "enum": ["success", "failure", "timeout", "skipped"] },
+          "name": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failure",
+              "timeout",
+              "skipped"
+            ]
+          },
           "result": {},
-          "latency_ms": { "type": "integer" }
+          "latency_ms": {
+            "type": "integer"
+          }
         },
-        "required": ["name"]
+        "required": [
+          "name"
+        ]
       }
     },
     "reasoning_steps": {
@@ -119,33 +215,75 @@
       "items": {
         "type": "object",
         "properties": {
-          "step": { "type": "integer" },
-          "type": { "type": "string", "enum": ["think", "retrieve", "remember", "tool_call", "tool_result", "generate", "decide", "act"] },
-          "content": { "type": "string" }
+          "step": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "think",
+              "retrieve",
+              "remember",
+              "tool_call",
+              "tool_result",
+              "generate",
+              "decide",
+              "act"
+            ]
+          },
+          "content": {
+            "type": "string"
+          }
         }
       }
     },
     "output": {
       "type": "object",
       "properties": {
-        "final_answer": { "type": "string" },
+        "final_answer": {
+          "type": "string"
+        },
         "citations": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
-    "expected_answer": { "type": "string" },
-    "expected_sources": { "type": "array", "items": { "type": "string" } },
-    "expected_tools": { "type": "array", "items": { "type": "string" } },
+    "expected_answer": {
+      "type": "string"
+    },
+    "expected_sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "expected_tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "metrics": {
       "type": "object",
       "properties": {
-        "latency_ms": { "type": "integer" },
-        "prompt_tokens": { "type": "integer" },
-        "completion_tokens": { "type": "integer" },
-        "total_tokens": { "type": "integer" },
-        "estimated_cost": { "type": "number" }
+        "latency_ms": {
+          "type": "integer"
+        },
+        "prompt_tokens": {
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "type": "integer"
+        },
+        "total_tokens": {
+          "type": "integer"
+        },
+        "estimated_cost": {
+          "type": "number"
+        }
       }
     }
   }

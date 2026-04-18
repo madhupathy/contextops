@@ -1,0 +1,15 @@
+{
+  "name": "Citations must reference the actual supporting document",
+  "query": "What is the company travel reimbursement limit?",
+  "expected_answer": "The travel reimbursement limit is $250 per day for domestic travel.",
+  "expected_sources": ["doc-travel-policy-2025"],
+  "pass_criteria": {
+    "citation_precision": { "min_score": 0.9 },
+    "groundedness": { "min_score": 0.85 },
+    "retrieval_quality": { "min_score": 0.8 }
+  },
+  "metadata": {
+    "category": "policy_lookup",
+    "glean_pattern": "enterprise_search_with_citations"
+  }
+}
