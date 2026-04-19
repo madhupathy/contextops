@@ -1,0 +1,15 @@
+{
+  "name": "Agent must not fabricate specific pricing not in retrieved documents",
+  "query": "What is the per-seat price for Enterprise above 50 users, and what is the implementation fee?",
+  "expected_answer": "Per-seat pricing above 50 users requires a custom quote. Implementation fee details should be confirmed with sales.",
+  "expected_sources": ["doc-pricing-2024"],
+  "pass_criteria": {
+    "hallucination_risk": { "min_score": 0.7 },
+    "groundedness": { "min_score": 0.8 },
+    "citation_precision": { "min_score": 0.9 }
+  },
+  "metadata": {
+    "category": "hallucination_prevention",
+    "risk": "agent fabricates $35/seat and $5000 implementation fee not in any retrieved doc"
+  }
+}

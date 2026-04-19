@@ -1,0 +1,146 @@
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "run_id": "run-multiturn-001",
+  "session_id": "session-hr-alice-20250419",
+  "turn": 3,
+  "previous_turns": [
+    {
+      "turn": 1,
+      "query": "How many vacation days do I have left this year?",
+      "answer": "You have 8 vacation days remaining for 2025.",
+      "sources": ["hr-system-balance"]
+    },
+    {
+      "turn": 2,
+      "query": "Can I carry any over to next year?",
+      "answer": "Yes, you can carry over up to 5 days under the 2025 policy.",
+      "sources": ["doc-pto-2025"]
+    }
+  ],
+  "user": {
+    "id": "alice-001",
+    "role": "employee",
+    "groups": ["engineering"]
+  },
+  "agent": {
+    "id": "hr-assistant",
+    "version": "0.3.0"
+  },
+  "input": {
+    "query": "Great — so if I take 3 days off in December, how many will I carry over? Also, what happens to them if I leave the company?"
+  },
+  "retrieval": {
+    "candidates": [
+      {
+        "doc_id": "doc-pto-2025",
+        "title": "PTO Policy 2025",
+        "score": 0.91,
+        "acl_passed": true,
+        "selected": true,
+        "content_preview": "Carry-over limit is 5 days. Upon separation, unused accrued PTO is paid out at your final base rate."
+      },
+      {
+        "doc_id": "doc-separation-policy",
+        "title": "Employee Separation Policy",
+        "score": 0.76,
+        "acl_passed": true,
+        "selected": true,
+        "content_preview": "Accrued PTO balance is paid out within 30 days of last day of employment."
+      },
+      {
+        "doc_id": "doc-exec-compensation",
+        "title": "Executive Compensation Package",
+        "score": 0.42,
+        "acl_passed": false,
+        "acl_reason": "role_mismatch",
+        "selected": false
+      }
+    ]
+  },
+  "memory": {
+    "candidates": [
+      {
+        "memory_id": "mem-t1-balance",
+        "memory_type": "episodic",
+        "content": "Turn 1: User has 8 vacation days remaining in 2025.",
+        "relevance_score": 0.95,
+        "recency_score": 0.98,
+        "is_stale": false,
+        "selected": true
+      },
+      {
+        "memory_id": "mem-t2-carryover",
+        "memory_type": "episodic",
+        "content": "Turn 2: User confirmed carry-over limit is 5 days under 2025 policy.",
+        "relevance_score": 0.92,
+        "recency_score": 0.97,
+        "is_stale": false,
+        "selected": true
+      },
+      {
+        "memory_id": "mem-t1-old-balance",
+        "memory_type": "episodic",
+        "content": "Turn from 2024 session: User had 12 days remaining in 2024.",
+        "relevance_score": 0.55,
+        "recency_score": 0.30,
+        "is_stale": true,
+        "stale_reason": "2024 session data, not relevant to 2025 balance",
+        "selected": false
+      }
+    ]
+  },
+  "tools": [
+    {
+      "name": "calculate_pto_balance",
+      "args": {"current_balance": 8, "days_to_take": 3, "carryover_limit": 5},
+      "result": {"remaining_after": 5, "carryover_eligible": 5},
+      "step_number": 2,
+      "status": "success",
+      "latency_ms": 45
+    }
+  ],
+  "reasoning_steps": [
+    {
+      "step": 1, "type": "think",
+      "content": "Multi-part query: (1) calculate carry-over if taking 3 days, (2) separation PTO payout. Have prior turn context: 8 days remaining, 5-day carry-over limit."
+    },
+    {
+      "step": 2, "type": "tool_call",
+      "content": "Calling calculate_pto_balance: 8 - 3 = 5 days remaining, all 5 eligible for carry-over."
+    },
+    {
+      "step": 3, "type": "retrieve",
+      "content": "Retrieving separation policy for PTO payout rules."
+    },
+    {
+      "step": 4, "type": "generate",
+      "content": "Answering both questions using memory from turns 1-2 plus current retrieval."
+    }
+  ],
+  "output": {
+    "final_answer": "If you take 3 days in December, you'll have exactly 5 days remaining — which is the maximum carry-over allowed, so you can carry all 5 over to 2026.\n\nIf you leave the company, any unused accrued PTO is paid out at your final base rate within 30 days of your last day.",
+    "citations": ["doc-pto-2025", "doc-separation-policy"]
+  },
+  "expected_answer": "5 days carry-over (8 - 3 = 5, at the carry-over limit). PTO is paid out on separation within 30 days.",
+  "expected_sources": ["doc-pto-2025", "doc-separation-policy"],
+  "expected_tools": [{"tool_name": "calculate_pto_balance"}],
+  "metrics": {
+    "latency_ms": 1240,
+    "prompt_tokens": 3100,
+    "completion_tokens": 190,
+    "total_tokens": 3290,
+    "estimated_cost": 0.021
+  },
+  "context_manifest": {
+    "session_turns": 3,
+    "session_id": "session-hr-alice-20250419",
+    "baseline_scores": {
+      "answer_correctness": 0.88,
+      "groundedness": 0.91,
+      "task_completion": 0.90,
+      "response_completeness": 0.92,
+      "latency_ms": 1800,
+      "total_tokens": 4100
+    }
+  }
+}

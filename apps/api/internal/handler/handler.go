@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/contextops/api/internal/db"
@@ -1526,4 +1528,276 @@ func scoreToGrade(score float64) string {
 	default:
 		return "F"
 	}
+}
+
+// ============================================================
+// ANNOTATION QUEUE — human review of borderline runs
+// Enables auto-curation of golden datasets from production traffic
+// ============================================================
+
+type AnnotateRunRequest struct {
+	Annotation   string          `json:"annotation" binding:"required"` // correct|incorrect|ambiguous
+	Comment      string          `json:"comment"`
+	CorrectAnswer *string        `json:"correct_answer"`
+	AddToDataset  *string        `json:"add_to_dataset_id"`
+}
+
+func (h *Handler) AnnotateRun(c *gin.Context) {
+	runID := c.Param("id")
+	tenantID := h.tenantID(c)
+
+	var req AnnotateRunRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	validAnnotations := map[string]bool{"correct": true, "incorrect": true, "ambiguous": true, "needs_review": true}
+	if !validAnnotations[req.Annotation] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "annotation must be: correct, incorrect, ambiguous, or needs_review"})
+		return
+	}
+
+	// Verify run exists
+	var exists bool
+	_ = h.pool.QueryRow(c.Request.Context(),
+		`SELECT EXISTS(SELECT 1 FROM runs WHERE id = $1 AND tenant_id = $2)`, runID, tenantID,
+	).Scan(&exists)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "run not found"})
+		return
+	}
+
+	// Store annotation in context_manifest (extends existing JSONB column, no schema change needed)
+	annotation := map[string]interface{}{
+		"annotation":    req.Annotation,
+		"comment":       req.Comment,
+		"annotated_at":  time.Now().UTC().Format(time.RFC3339),
+	}
+	if req.CorrectAnswer != nil {
+		annotation["correct_answer"] = *req.CorrectAnswer
+	}
+
+	annotationJSON, _ := json.Marshal(annotation)
+	_, err := h.pool.Exec(c.Request.Context(),
+		`UPDATE runs
+		 SET context_manifest = context_manifest || jsonb_build_object('annotation', $1::jsonb)
+		 WHERE id = $2 AND tenant_id = $3`,
+		string(annotationJSON), runID, tenantID,
+	)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to annotate run")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store annotation"})
+		return
+	}
+
+	// If requested, add to a dataset
+	if req.AddToDataset != nil && *req.AddToDataset != "" {
+		// Fetch run for dataset case creation
+		var query, finalAnswer, expectedAnswer string
+		var totalTokens int
+		var estimatedCost float64
+		h.pool.QueryRow(c.Request.Context(),
+			`SELECT query, COALESCE(final_answer, ''), COALESCE(expected_answer, ''),
+			        total_tokens, estimated_cost
+			 FROM runs WHERE id = $1`, runID,
+		).Scan(&query, &finalAnswer, &expectedAnswer, &totalTokens, &estimatedCost)
+
+		correctAnswer := finalAnswer
+		if req.CorrectAnswer != nil {
+			correctAnswer = *req.CorrectAnswer
+		}
+
+		caseID := uuid.New().String()
+		_, _ = h.pool.Exec(c.Request.Context(),
+			`INSERT INTO dataset_cases (id, dataset_id, name, query, expected_answer, metadata, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 ON CONFLICT DO NOTHING`,
+			caseID, *req.AddToDataset,
+			fmt.Sprintf("from-run-%s", runID[:8]),
+			query, correctAnswer,
+			annotationJSON, time.Now(),
+		)
+
+		// Update dataset case count
+		_, _ = h.pool.Exec(c.Request.Context(),
+			`UPDATE datasets SET case_count = case_count + 1 WHERE id = $1`,
+			*req.AddToDataset,
+		)
+	}
+
+	h.audit(c, "annotate", "run", runID, annotationJSON)
+	c.JSON(http.StatusOK, gin.H{
+		"run_id":     runID,
+		"annotation": req.Annotation,
+		"added_to_dataset": req.AddToDataset,
+		"message":    "Annotation saved",
+	})
+}
+
+// ============================================================
+// DRIFT MONITORING — detect quality degradation over time
+// ============================================================
+
+func (h *Handler) GetAgentDrift(c *gin.Context) {
+	tenantID := h.tenantID(c)
+	agentID := c.Query("agent_id")
+	windowHours := 24
+	if w := c.Query("window_hours"); w != "" {
+		if n, err := fmt.Sscanf(w, "%d", &windowHours); n != 1 || err != nil {
+			windowHours = 24
+		}
+	}
+
+	// Query average scores per category over sliding windows
+	type windowResult struct {
+		Category string  `json:"category"`
+		AvgScore float64 `json:"avg_score"`
+		Count    int     `json:"count"`
+		Window   string  `json:"window"`
+	}
+
+	var results []windowResult
+
+	baseQuery := `
+		SELECT e.category,
+		       AVG(e.score)::float8 as avg_score,
+		       COUNT(*)::int as count,
+		       $1 as window
+		FROM evaluations e
+		JOIN runs r ON r.id = e.run_id
+		WHERE e.tenant_id = $2
+		  AND r.created_at >= NOW() - ($3 || ' hours')::interval`
+
+	args := []interface{}{"current", tenantID, fmt.Sprintf("%d", windowHours)}
+	if agentID != "" {
+		baseQuery += " AND r.agent_id = $4"
+		args = append(args, agentID)
+	}
+	baseQuery += " GROUP BY e.category ORDER BY e.category"
+
+	rows, err := h.pool.Query(c.Request.Context(), baseQuery, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var r windowResult
+		if err := rows.Scan(&r.Category, &r.AvgScore, &r.Count, &r.Window); err == nil {
+			r.AvgScore = math.Round(r.AvgScore*1000) / 1000
+			results = append(results, r)
+		}
+	}
+
+	// Also get previous window for comparison
+	prevArgs := []interface{}{"previous", tenantID, fmt.Sprintf("%d", windowHours*2)}
+	prevQuery := strings.Replace(baseQuery, "NOW() - ($3", "NOW() - ($3", 1)
+	prevQuery = strings.Replace(prevQuery,
+		"AND r.created_at >= NOW() - ($3 || ' hours')::interval",
+		"AND r.created_at >= NOW() - ($3 || ' hours')::interval AND r.created_at < NOW() - ($4 || ' hours')::interval",
+		1,
+	)
+	prevArgs = append(prevArgs, fmt.Sprintf("%d", windowHours))
+	if agentID != "" {
+		prevQuery += " AND r.agent_id = $5"
+		prevArgs = append(prevArgs, agentID)
+	}
+	// For simplicity, rebuild the previous window query
+	prevQueryFinal := fmt.Sprintf(`
+		SELECT e.category,
+		       AVG(e.score)::float8 as avg_score,
+		       COUNT(*)::int as count,
+		       'previous' as window
+		FROM evaluations e
+		JOIN runs r ON r.id = e.run_id
+		WHERE e.tenant_id = $1
+		  AND r.created_at >= NOW() - INTERVAL '%d hours'
+		  AND r.created_at < NOW() - INTERVAL '%d hours'
+		%s
+		GROUP BY e.category ORDER BY e.category`,
+		windowHours*2, windowHours,
+		func() string {
+			if agentID != "" {
+				return "AND r.agent_id = $2"
+			}
+			return ""
+		}(),
+	)
+
+	prevQueryArgs := []interface{}{tenantID}
+	if agentID != "" {
+		prevQueryArgs = append(prevQueryArgs, agentID)
+	}
+
+	prevRows, err := h.pool.Query(c.Request.Context(), prevQueryFinal, prevQueryArgs...)
+	var prevResults []windowResult
+	if err == nil {
+		defer prevRows.Close()
+		for prevRows.Next() {
+			var r windowResult
+			if err := prevRows.Scan(&r.Category, &r.AvgScore, &r.Count, &r.Window); err == nil {
+				r.AvgScore = math.Round(r.AvgScore*1000) / 1000
+				prevResults = append(prevResults, r)
+			}
+		}
+	}
+
+	// Compute drift per category
+	type driftEntry struct {
+		Category    string   `json:"category"`
+		Current     float64  `json:"current_avg"`
+		Previous    *float64 `json:"previous_avg,omitempty"`
+		Delta       *float64 `json:"delta,omitempty"`
+		Trend       string   `json:"trend"` // improving|degrading|stable|insufficient_data
+		CurrentRuns int      `json:"current_runs"`
+	}
+
+	prevByCategory := map[string]windowResult{}
+	for _, r := range prevResults {
+		prevByCategory[r.Category] = r
+	}
+
+	var driftEntries []driftEntry
+	for _, cur := range results {
+		entry := driftEntry{
+			Category:    cur.Category,
+			Current:     cur.AvgScore,
+			CurrentRuns: cur.Count,
+			Trend:       "insufficient_data",
+		}
+		if prev, ok := prevByCategory[cur.Category]; ok && prev.Count >= 3 {
+			delta := cur.AvgScore - prev.AvgScore
+			prevScore := prev.AvgScore
+			entry.Previous = &prevScore
+			roundedDelta := math.Round(delta*1000) / 1000
+			entry.Delta = &roundedDelta
+			switch {
+			case delta > 0.05:
+				entry.Trend = "improving"
+			case delta < -0.05:
+				entry.Trend = "degrading"
+			default:
+				entry.Trend = "stable"
+			}
+		}
+		driftEntries = append(driftEntries, entry)
+	}
+
+	degrading := 0
+	for _, d := range driftEntries {
+		if d.Trend == "degrading" {
+			degrading++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"agent_id":     agentID,
+		"tenant_id":    tenantID,
+		"window_hours": windowHours,
+		"categories":   len(driftEntries),
+		"degrading":    degrading,
+		"drift":        driftEntries,
+	})
 }

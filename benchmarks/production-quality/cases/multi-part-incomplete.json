@@ -1,0 +1,15 @@
+{
+  "name": "Agent must answer all parts of a multi-part question",
+  "query": "How many vacation days do I get, and what happens to unused days when I leave the company?",
+  "expected_answer": "Full-time employees receive 20 days PTO per year. Upon separation, unused accrued PTO is paid out at your final base rate within 30 days.",
+  "expected_sources": ["doc-pto-2025", "doc-separation-policy"],
+  "pass_criteria": {
+    "response_completeness": { "min_score": 0.8 },
+    "task_completion": { "min_score": 0.8 },
+    "answer_correctness": { "min_score": 0.75 }
+  },
+  "metadata": {
+    "category": "completeness",
+    "failure_mode": "agent_answers_first_subquestion_only"
+  }
+}

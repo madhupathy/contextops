@@ -109,12 +109,16 @@ func setupRouter(pool *db.Pool) *gin.Engine {
 		v1.GET("/runs/:id", h.GetRun)
 		v1.GET("/runs/:id/timeline", h.GetRunTimeline)
 		v1.GET("/runs/:id/context-manifest", h.GetContextManifest)
+		v1.POST("/runs/:id/annotate", h.AnnotateRun)
 
 		// Evaluations
 		v1.POST("/runs/:id/evaluate", h.TriggerEvaluation)
 		v1.GET("/runs/:id/evaluations", h.GetRunEvaluations)
 		v1.GET("/runs/:id/eval-summary", h.GetRunEvalSummary)
 		v1.GET("/evaluations", h.ListEvaluations)
+
+		// Drift monitoring
+		v1.GET("/drift", h.GetAgentDrift)
 
 		// Benchmarks
 		v1.POST("/benchmarks", h.CreateBenchmarkSuite)

@@ -1,11 +1,13 @@
 """ContextOps Evaluator Service.
 
-12 evaluators covering the full AI agent quality stack:
+15 evaluators covering the full AI agent quality stack:
   Core:        answer_correctness · groundedness · citation_precision · task_completion
+               response_completeness · hallucination_risk
   Retrieval:   retrieval_quality · permission_safety
   Memory:      memory_utility · context_poisoning · session_coherence
   Agent:       tool_correctness · trajectory_quality
   Cost:        cost_efficiency
+  Production:  agent_regression
 """
 
 from __future__ import annotations
@@ -69,7 +71,7 @@ app = FastAPI(
         "12 evaluators covering correctness, retrieval, memory, context poisoning, "
         "session coherence, tool usage, and cost efficiency."
     ),
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -88,7 +90,7 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
-    return HealthResponse(status="ok", service="contextops-evaluator", version="0.2.0")
+    return HealthResponse(status="ok", service="contextops-evaluator", version="0.3.0")
 
 
 @app.get("/evaluators")
@@ -118,8 +120,12 @@ async def list_profiles():
                 "description": "Enterprise safety — permissions, citations, grounding, context poisoning",
                 "categories": registry.categories_for_intent("enterprise"),
             },
+            "production": {
+                "description": "Production regression & quality monitoring — regression, cost, correctness, hallucination",
+                "categories": registry.categories_for_intent("production"),
+            },
             "full": {
-                "description": "All 12 evaluators",
+                "description": "All 15 evaluators",
                 "categories": registry.categories_for_intent("full"),
             },
         }

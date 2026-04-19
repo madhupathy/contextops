@@ -69,7 +69,7 @@ jobs:
           from evaluators.registry import EvaluatorRegistry
           r = EvaluatorRegistry()
           evals = r.list_evaluators()
-          assert len(evals) == 12, f'Expected 12 evaluators, got {len(evals)}: {[e[\"category\"] for e in evals]}'
+          assert len(evals) == 15, f'Expected 15 evaluators, got {len(evals)}: {[e[\"category\"] for e in evals]}'
           print(f'OK: {len(evals)} evaluators registered')
           for e in evals:
               print(f'  - {e[\"category\"]}')
@@ -79,7 +79,7 @@ jobs:
           python -c "
           from evaluators.registry import EvaluatorRegistry
           r = EvaluatorRegistry()
-          for profile in ('rag', 'agent', 'memory', 'enterprise', 'full'):
+          for profile in ('rag', 'agent', 'memory', 'enterprise', 'production', 'full'):
               cats = r.categories_for_intent(profile)
               assert len(cats) > 0, f'Profile {profile} has no categories'
               print(f'Profile {profile}: {cats}')

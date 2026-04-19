@@ -252,7 +252,8 @@ CREATE TABLE evaluations (
         'answer_correctness', 'groundedness', 'retrieval_quality',
         'citation_precision', 'permission_safety', 'memory_utility',
         'tool_correctness', 'trajectory_quality', 'task_completion',
-        'cost_efficiency', 'context_poisoning', 'session_coherence'
+        'cost_efficiency', 'context_poisoning', 'session_coherence',
+        'hallucination_risk', 'response_completeness', 'agent_regression'
     )),
     
     -- Result
