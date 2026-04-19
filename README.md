@@ -91,6 +91,57 @@ contextops gate check --config .contextops/gates.yaml
 
 ---
 
+---
+
+## Integrating with your agent
+
+There are four ways to plug ContextOps into any existing agent, from a two-line minimal wrapper to a full framework callback. **[Full integration guide →](docs/integration/README.md)**
+
+### The one-minute version
+
+After each agent run, POST a single JSON trace:
+
+```python
+import httpx, uuid
+
+httpx.post("http://localhost:8080/api/v1/runs", json={
+    "run_id":  str(uuid.uuid4()),
+    "agent":   {"id": "my-agent"},
+    "input":   {"query": user_query},
+    "output":  {"final_answer": agent_answer},
+    "metrics": {"latency_ms": latency_ms, "total_tokens": token_count},
+})
+```
+
+Then evaluate:
+```bash
+contextops eval run YOUR_RUN_ID
+```
+
+### Supported patterns
+
+| Pattern | When to use |
+|---------|-------------|
+| **Direct HTTP** ([guide](docs/integration/README.md#pattern-a--direct-http-any-language-any-framework)) | Any language, any framework — wrap your run in a few lines |
+| **LangChain / LangGraph callback** ([guide](docs/integration/README.md#pattern-b--langchain--langgraph-callback)) | Drop a callback handler into your existing chain — no changes to chain code |
+| **OpenAI Agents SDK** ([guide](docs/integration/README.md#pattern-c--openai-agents-sdk)) | Wrap your agent run with a context manager |
+| **Absolute minimum** ([guide](docs/integration/README.md#pattern-d--absolute-minimum-any-framework)) | Just query + answer + tokens — enables 5 evaluators with two fields |
+
+### What to add to unlock each evaluator
+
+```
+retrieval.candidates  →  retrieval_quality, permission_safety, citation_precision,
+                         groundedness, context_poisoning
+memory.candidates     →  memory_utility, context_poisoning, session_coherence
+tools                 →  tool_correctness, task_completion, trajectory_quality
+reasoning_steps       →  trajectory_quality, context_poisoning
+expected_answer       →  answer_correctness (LLM-as-judge)
+expected_sources      →  retrieval_quality (recall measurement)
+metrics.total_tokens  →  cost_efficiency, agent_regression
+```
+
+---
+
 ## Sending a Trace
 
 Send one JSON object capturing everything that happened in a single AI run:
@@ -148,7 +199,7 @@ cost_efficiency      0.82  PASS  Latency and token spend within bounds
 
 ---
 
-## 12 Evaluators
+## 15 Evaluators
 
 ### Core Quality
 
@@ -186,6 +237,9 @@ cost_efficiency      0.82  PASS  Latency and token spend within bounds
 | Evaluator | What it measures |
 |-----------|-----------------|
 | `cost_efficiency` | Token spend, latency, and cost within configured thresholds |
+| `hallucination_risk` | Detects high-risk claim patterns — statistics, URLs, quotes not grounded in evidence |
+| `response_completeness` | Were ALL sub-questions in a multi-part query answered? |
+| `agent_regression` | Did quality degrade vs a recorded baseline run? |
 
 ---
 
