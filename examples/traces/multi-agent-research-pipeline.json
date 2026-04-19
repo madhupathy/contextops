@@ -1,0 +1,91 @@
+{
+  "_comment": "CrewAI-style 3-agent pipeline: orchestrator → researcher → writer",
+
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "run_id": "run-orchestrator-001",
+  "task_id": "task-competitive-analysis-acme",
+  "agent_role": "orchestrator",
+  "user": { "id": "u-pm-01", "role": "product_manager", "groups": ["product"] },
+  "agent": { "id": "orchestrator-agent", "version": "0.1.0" },
+  "input": {
+    "query": "Produce a competitive analysis report on Acme Corp's Q1 2025 performance"
+  },
+  "plan": {
+    "steps": [
+      { "step_id": "s1", "description": "Search for Acme Corp Q1 2025 financial data", "completed": true,  "assigned_to": "researcher-agent" },
+      { "step_id": "s2", "description": "Identify 3 main competitors and their Q1 metrics", "completed": true,  "assigned_to": "researcher-agent" },
+      { "step_id": "s3", "description": "Write executive summary with key findings", "completed": true,  "assigned_to": "writer-agent" },
+      { "step_id": "s4", "description": "Add data visualisation recommendations", "completed": false, "assigned_to": "writer-agent" }
+    ],
+    "total_steps": 4,
+    "completed_steps": 3
+  },
+  "handoffs": [
+    {
+      "from_agent": "orchestrator-agent",
+      "to_agent": "researcher-agent",
+      "reason": "Delegating data collection tasks s1 and s2",
+      "context_passed": {
+        "task_id": "task-competitive-analysis-acme",
+        "target_company": "Acme Corp",
+        "target_period": "Q1 2025",
+        "steps_assigned": ["s1", "s2"]
+      },
+      "timestamp": "2025-04-19T10:00:01Z"
+    },
+    {
+      "from_agent": "researcher-agent",
+      "to_agent": "orchestrator-agent",
+      "reason": "Research complete, returning findings",
+      "context_passed": {
+        "findings_run_id": "run-researcher-001",
+        "data_collected": true,
+        "steps_completed": ["s1", "s2"]
+      },
+      "timestamp": "2025-04-19T10:02:45Z"
+    },
+    {
+      "from_agent": "orchestrator-agent",
+      "to_agent": "writer-agent",
+      "reason": "Delegating report writing task s3",
+      "context_passed": {
+        "research_run_id": "run-researcher-001",
+        "steps_assigned": ["s3"],
+        "findings_summary": "Acme Q1 revenue $12M (+8% YoY). Top competitors: Beta Corp ($18M), Gamma Inc ($9M), Delta Ltd ($7M)"
+      },
+      "timestamp": "2025-04-19T10:02:50Z"
+    }
+  ],
+  "tools": [
+    { "name": "spawn_subagent", "args": {"agent_id": "researcher-agent", "task": "collect_data"}, "status": "success", "step_number": 2, "latency_ms": 165000 },
+    { "name": "spawn_subagent", "args": {"agent_id": "writer-agent",     "task": "write_report"}, "status": "success", "step_number": 4, "latency_ms": 98000 }
+  ],
+  "reasoning_steps": [
+    { "step": 1, "type": "think",    "content": "Task: competitive analysis. Creating plan with 4 steps: data collection (s1,s2) → report writing (s3,s4)" },
+    { "step": 2, "type": "act",      "content": "Delegating s1+s2 to researcher-agent with company and period context", "node_id": "delegate_research" },
+    { "step": 3, "type": "decide",   "content": "Research returned. Quality looks sufficient. Delegating s3 to writer-agent with findings.", "node_id": "review_research" },
+    { "step": 4, "type": "act",      "content": "Delegating s3 to writer-agent", "node_id": "delegate_writing" },
+    { "step": 5, "type": "generate", "content": "Assembling final output from sub-agent results. Note: s4 (visualisation) not completed due to writer timeout." }
+  ],
+  "output": {
+    "final_answer": "Competitive analysis complete (partial). Steps s1-s3 completed. Acme Corp Q1 2025: $12M revenue (+8% YoY). Key findings attached from researcher-agent (run-researcher-001). Executive summary completed by writer-agent (run-writer-001). Note: data visualisation recommendations (s4) could not be completed in this run.",
+    "citations": ["run-researcher-001", "run-writer-001"]
+  },
+  "expected_answer": "Full competitive analysis with Acme Q1 financials, 3 competitors, executive summary, and visualisation recommendations.",
+  "metrics": {
+    "latency_ms": 265000,
+    "prompt_tokens": 4200,
+    "completion_tokens": 380,
+    "total_tokens": 4580,
+    "estimated_cost": 0.068
+  },
+  "context_manifest": {
+    "task_id": "task-competitive-analysis-acme",
+    "sub_run_ids": ["run-researcher-001", "run-writer-001"],
+    "baseline_scores": {
+      "plan_adherence": 0.95,
+      "agent_handoff_quality": 0.90,
+      "task_completion": 0.92
+    }
+  }
+}

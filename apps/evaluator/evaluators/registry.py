@@ -1,6 +1,6 @@
 """Evaluator registry — central place to register and retrieve evaluators.
 
-Registered evaluators (15 total):
+Registered evaluators (17 total):
 Core quality:
   answer_correctness      - Is the final answer factually correct?
   groundedness            - Is every claim supported by retrieved evidence?
@@ -27,12 +27,18 @@ Cost & performance:
 
 Production:
   agent_regression        - Did quality degrade vs a recorded baseline run?
+
+Autonomous agents:
+  plan_adherence          - Did the agent follow the plan it created (plan-and-execute)?
+  agent_handoff_quality   - Was context passed correctly between agents (multi-agent)?
 """
 
 from __future__ import annotations
 
 from evaluators.base import BaseEvaluator
+from evaluators.agent_handoff_quality import AgentHandoffQualityEvaluator
 from evaluators.agent_regression import AgentRegressionEvaluator
+from evaluators.plan_adherence import PlanAdherenceEvaluator
 from evaluators.answer_correctness import AnswerCorrectnessEvaluator
 from evaluators.citation_precision import CitationPrecisionEvaluator
 from evaluators.context_poisoning import ContextPoisoningEvaluator
@@ -78,6 +84,9 @@ class EvaluatorRegistry:
         self.register(CostEfficiencyEvaluator())
         # Production
         self.register(AgentRegressionEvaluator())
+        # Autonomous agents
+        self.register(PlanAdherenceEvaluator())
+        self.register(AgentHandoffQualityEvaluator())
 
     def register(self, evaluator: BaseEvaluator):
         self._evaluators[evaluator.category] = evaluator
@@ -119,6 +128,11 @@ class EvaluatorRegistry:
             "production": [
                 "agent_regression", "cost_efficiency", "answer_correctness",
                 "groundedness", "task_completion", "hallucination_risk",
+            ],
+            "autonomous": [
+                "plan_adherence", "agent_handoff_quality", "trajectory_quality",
+                "tool_correctness", "task_completion", "agent_regression",
+                "response_completeness",
             ],
             "full": list(self._evaluators.keys()),
         }

@@ -94,6 +94,14 @@ CREATE TABLE runs (
     expected_tools  JSONB,
     expected_sources JSONB,
     
+    -- Autonomous agent linkage
+    parent_run_id   UUID REFERENCES runs(id),       -- set when spawned by an orchestrator
+    task_id         TEXT,                            -- groups all runs of one long-horizon task
+    agent_role      TEXT DEFAULT 'standalone' CHECK (agent_role IN
+                    ('orchestrator','subagent','specialist','planner','executor','evaluator','standalone')),
+    plan            JSONB NOT NULL DEFAULT '{}',     -- plan-and-execute: steps + completion status
+    handoffs        JSONB NOT NULL DEFAULT '[]',     -- control transfer records to/from agents
+
     -- Context manifest
     context_manifest JSONB NOT NULL DEFAULT '{}',
     
@@ -108,6 +116,9 @@ CREATE INDEX idx_runs_agent ON runs(agent_id);
 CREATE INDEX idx_runs_identity ON runs(identity_id);
 CREATE INDEX idx_runs_status ON runs(tenant_id, status);
 CREATE INDEX idx_runs_created ON runs(tenant_id, created_at DESC);
+CREATE INDEX idx_runs_parent ON runs(parent_run_id) WHERE parent_run_id IS NOT NULL;
+CREATE INDEX idx_runs_task ON runs(tenant_id, task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX idx_runs_role ON runs(tenant_id, agent_role);
 
 -- ============================================================
 -- RETRIEVAL CANDIDATES (docs considered during retrieval)
@@ -253,7 +264,8 @@ CREATE TABLE evaluations (
         'citation_precision', 'permission_safety', 'memory_utility',
         'tool_correctness', 'trajectory_quality', 'task_completion',
         'cost_efficiency', 'context_poisoning', 'session_coherence',
-        'hallucination_risk', 'response_completeness', 'agent_regression'
+        'hallucination_risk', 'response_completeness', 'agent_regression',
+        'plan_adherence', 'agent_handoff_quality'
     )),
     
     -- Result
@@ -274,6 +286,32 @@ CREATE INDEX idx_evaluations_run ON evaluations(run_id);
 CREATE INDEX idx_evaluations_tenant ON evaluations(tenant_id);
 CREATE INDEX idx_evaluations_category ON evaluations(tenant_id, category);
 CREATE UNIQUE INDEX idx_evaluations_run_category ON evaluations(run_id, category);
+
+
+-- ============================================================
+-- AGENT GRAPHS (reconstructed execution DAG for multi-agent tasks)
+-- Built from parent_run_id chains; pre-computed for dashboard rendering
+-- ============================================================
+CREATE TABLE agent_graphs (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_id         TEXT NOT NULL,
+    tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    root_run_id     UUID NOT NULL REFERENCES runs(id),
+    total_runs      INTEGER NOT NULL DEFAULT 0,
+    total_tool_calls INTEGER NOT NULL DEFAULT 0,
+    total_tokens    INTEGER NOT NULL DEFAULT 0,
+    total_latency_ms INTEGER NOT NULL DEFAULT 0,
+    estimated_cost  NUMERIC(10, 6) NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','completed','failed','partial')),
+    graph_data      JSONB NOT NULL DEFAULT '{}',   -- serialised DAG: nodes + edges
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_agent_graphs_tenant ON agent_graphs(tenant_id);
+CREATE INDEX idx_agent_graphs_task ON agent_graphs(task_id);
+CREATE UNIQUE INDEX idx_agent_graphs_task_tenant ON agent_graphs(task_id, tenant_id);
 
 -- ============================================================
 -- BENCHMARK SUITES
