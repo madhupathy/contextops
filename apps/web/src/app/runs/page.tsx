@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   Activity, AlertTriangle, CheckCircle2, Clock, Cpu, Search,
-  ShieldAlert, TrendingDown, XCircle,
+  ShieldAlert, GitCompare, XCircle,
 } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -42,6 +42,22 @@ export default function RunsPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [selected, setSelected] = useState<string[]>([]);
+
+  function toggleSelect(id: string) {
+    setSelected((prev) =>
+      prev.includes(id)
+        ? prev.filter((x) => x !== id)
+        : prev.length < 2
+        ? [...prev, id]
+        : [prev[1], id] // replace oldest when 2 already selected
+    );
+  }
+
+  function compareUrl(): string {
+    const [a, b] = selected;
+    return `/compare?a=${a}&b=${b}`;
+  }
 
   useEffect(() => {
     fetchRuns();
@@ -105,12 +121,28 @@ export default function RunsPage() {
             )}
           </p>
         </div>
-        {hasCritical && (
-          <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            <ShieldAlert className="w-4 h-4 text-red-600" />
-            <span className="text-xs text-red-700 font-medium">Critical violations detected</span>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {selected.length === 2 && (
+            <a
+              href={compareUrl()}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <GitCompare className="w-4 h-4" />
+              Compare selected
+            </a>
+          )}
+          {selected.length === 1 && (
+            <span className="text-xs text-slate-500 bg-slate-100 px-3 py-2 rounded-lg">
+              Select one more run to compare
+            </span>
+          )}
+          {hasCritical && (
+            <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <ShieldAlert className="w-4 h-4 text-red-600" />
+              <span className="text-xs text-red-700 font-medium">Critical violations detected</span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -152,7 +184,8 @@ export default function RunsPage() {
       ) : (
         <div className="card divide-y divide-slate-100">
           {/* Table header */}
-          <div className="grid grid-cols-[1fr_80px_80px_64px_64px_80px_64px] gap-3 px-5 py-2.5 bg-slate-50 text-xs font-medium text-slate-500 uppercase tracking-wider rounded-t-lg">
+          <div className="grid grid-cols-[32px_1fr_80px_80px_64px_64px_80px_64px] gap-3 px-5 py-2.5 bg-slate-50 text-xs font-medium text-slate-500 uppercase tracking-wider rounded-t-lg">
+            <div></div>
             <div>Query</div>
             <div>Status</div>
             <div>Grade</div>
@@ -164,19 +197,31 @@ export default function RunsPage() {
 
           {filtered.map((run) => {
             const evalSum = evalSummaries[run.id];
+            const isSelected = selected.includes(run.id);
             return (
-              <a
+              <div
                 key={run.id}
-                href={`/runs/${run.id}`}
-                className="grid grid-cols-[1fr_80px_80px_64px_64px_80px_64px] gap-3 px-5 py-3 hover:bg-slate-50 transition-colors items-center"
+                className={`grid grid-cols-[32px_1fr_80px_80px_64px_64px_80px_64px] gap-3 px-5 py-3 transition-colors items-center ${
+                  isSelected ? "bg-brand-50 border-l-2 border-brand-500" : "hover:bg-slate-50"
+                }`}
               >
-                {/* Query */}
-                <div className="min-w-0">
+                {/* Select checkbox */}
+                <div>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelect(run.id)}
+                    title="Select for comparison"
+                    className="w-4 h-4 rounded border-slate-300 text-brand-600 cursor-pointer accent-brand-600"
+                  />
+                </div>
+                {/* Query — clicking navigates to detail page */}
+                <a href={`/runs/${run.id}`} className="min-w-0 block hover:underline">
                   <p className="text-sm font-medium text-slate-900 truncate">{run.query}</p>
                   <p className="text-xs text-slate-400 mt-0.5 font-mono truncate">
                     {run.id.slice(0, 16)}…
                   </p>
-                </div>
+                </a>
 
                 {/* Status */}
                 <StatusBadge status={run.status} />
@@ -225,7 +270,7 @@ export default function RunsPage() {
 
                 {/* Age */}
                 <div className="text-xs text-slate-400">{timeAgo(run.created_at)}</div>
-              </a>
+              </div>
             );
           })}
         </div>

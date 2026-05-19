@@ -1,0 +1,200 @@
+name: 'ContextOps Evaluation Gate'
+description: 'Run ContextOps evaluations and fail CI if quality scores regress'
+
+inputs:
+  api-url:
+    description: 'ContextOps API URL'
+    required: true
+  api-key:
+    description: 'ContextOps API key'
+    required: true
+  run-id:
+    description: 'The trace run ID to evaluate'
+    required: true
+  categories:
+    description: 'Comma-separated evaluator categories to run'
+    default: 'core_quality,retrieval,memory'
+  threshold:
+    description: 'Minimum pass score (0.0-1.0)'
+    default: '0.7'
+  fail-on-regression:
+    description: 'Fail CI if scores regress vs the most recent baseline run'
+    default: 'true'
+
+outputs:
+  score:
+    description: 'Overall evaluation score (0.0-1.0)'
+    value: ${{ steps.poll.outputs.score }}
+  passed:
+    description: 'Whether the gate passed ("true" or "false")'
+    value: ${{ steps.poll.outputs.passed }}
+  report-url:
+    description: 'URL to the full evaluation report in the ContextOps UI'
+    value: ${{ steps.poll.outputs.report_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Trigger evaluation
+      id: trigger
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+        API_KEY: ${{ inputs.api-key }}
+        RUN_ID: ${{ inputs.run-id }}
+        CATEGORIES: ${{ inputs.categories }}
+      run: |
+        echo "::group::Triggering ContextOps evaluation"
+
+        # Build category array JSON from comma-separated input
+        CATEGORY_JSON=$(python3 -c "
+        import json, sys
+        cats = [c.strip() for c in sys.argv[1].split(',') if c.strip()]
+        print(json.dumps(cats))
+        " "$CATEGORIES")
+
+        PAYLOAD=$(python3 -c "
+        import json, sys
+        print(json.dumps({'categories': json.loads(sys.argv[1])}))
+        " "$CATEGORY_JSON")
+
+        RESPONSE=$(curl -sf \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${API_KEY}" \
+          "${API_URL}/api/v1/runs/${RUN_ID}/evaluate" \
+          -d "$PAYLOAD") || {
+            echo "::error::Failed to trigger evaluation. Check that api-url and api-key are correct and the run ID exists."
+            exit 1
+          }
+
+        echo "Trigger response: $RESPONSE"
+        echo "::endgroup::"
+
+    - name: Poll for results
+      id: poll
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+        API_KEY: ${{ inputs.api-key }}
+        RUN_ID: ${{ inputs.run-id }}
+        THRESHOLD: ${{ inputs.threshold }}
+        FAIL_ON_REGRESSION: ${{ inputs.fail-on-regression }}
+      run: |
+        echo "::group::Polling for evaluation results"
+
+        MAX_ATTEMPTS=30   # 30 × 10s = 5 minutes max
+        ATTEMPT=0
+        SCORE=""
+        GRADE=""
+        PASSED="false"
+
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          ATTEMPT=$((ATTEMPT + 1))
+          echo "Poll attempt $ATTEMPT / $MAX_ATTEMPTS …"
+
+          SUMMARY=$(curl -sf \
+            -H "Authorization: Bearer ${API_KEY}" \
+            "${API_URL}/api/v1/runs/${RUN_ID}/eval-summary") || {
+              echo "  Warning: could not reach eval-summary endpoint, retrying…"
+              sleep 10
+              continue
+            }
+
+          # Extract fields via python (always available in ubuntu-latest)
+          GRADE=$(echo "$SUMMARY" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('grade',''))")
+          AVG_SCORE=$(echo "$SUMMARY" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('avg_score','0'))")
+          TOTAL=$(echo "$SUMMARY" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('passed',0)+d.get('failed',0))")
+
+          if [ -n "$GRADE" ] && [ "$TOTAL" -gt "0" ] 2>/dev/null; then
+            echo "  Evaluation complete. Grade=$GRADE  Score=$AVG_SCORE"
+            SCORE="$AVG_SCORE"
+            break
+          fi
+
+          sleep 10
+        done
+
+        if [ -z "$SCORE" ]; then
+          echo "::error::Evaluation did not complete within the polling window (5 min). Check the evaluator service."
+          echo "score=0" >> "$GITHUB_OUTPUT"
+          echo "passed=false" >> "$GITHUB_OUTPUT"
+          echo "report_url=${API_URL}/runs/${RUN_ID}" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        REPORT_URL="${API_URL}/runs/${RUN_ID}"
+        echo "report_url=$REPORT_URL" >> "$GITHUB_OUTPUT"
+        echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+
+        # Check threshold
+        ABOVE_THRESHOLD=$(python3 -c "
+        import sys
+        score = float(sys.argv[1])
+        threshold = float(sys.argv[2])
+        print('true' if score >= threshold else 'false')
+        " "$SCORE" "$THRESHOLD")
+
+        echo "Score=$SCORE  Threshold=$THRESHOLD  Above=$ABOVE_THRESHOLD"
+
+        # Check regression vs baseline (compare endpoint)
+        REGRESSION_DETECTED="false"
+        if [ "$FAIL_ON_REGRESSION" = "true" ]; then
+          COMPARE=$(curl -sf \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${API_KEY}" \
+            "${API_URL}/api/v1/compare" \
+            -d "{\"run_ids\":[\"${RUN_ID}\"],\"vs_baseline\":true}") || true
+
+          if [ -n "$COMPARE" ]; then
+            REGRESSION_DETECTED=$(echo "$COMPARE" | python3 -c "
+        import json, sys
+        try:
+            d = json.load(sys.stdin)
+            regressions = d.get('regressions', [])
+            print('true' if len(regressions) > 0 else 'false')
+        except Exception:
+            print('false')
+        " 2>/dev/null || echo "false")
+          fi
+          echo "Regression detected: $REGRESSION_DETECTED"
+        fi
+
+        # Decide final pass/fail
+        if [ "$ABOVE_THRESHOLD" = "true" ] && [ "$REGRESSION_DETECTED" = "false" ]; then
+          PASSED="true"
+        fi
+
+        echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+        echo "::endgroup::"
+
+        # Print summary for the GitHub Actions step summary
+        cat >> "$GITHUB_STEP_SUMMARY" << SUMMARY_EOF
+        ## ContextOps Evaluation Gate
+
+        | Field | Value |
+        |-------|-------|
+        | Run ID | \`${RUN_ID}\` |
+        | Score | ${SCORE} |
+        | Grade | ${GRADE} |
+        | Threshold | ${THRESHOLD} |
+        | Regression | ${REGRESSION_DETECTED} |
+        | **Result** | $([ "$PASSED" = "true" ] && echo "PASSED" || echo "FAILED") |
+
+        [View full report](${REPORT_URL})
+        SUMMARY_EOF
+
+    - name: Enforce gate
+      shell: bash
+      env:
+        PASSED: ${{ steps.poll.outputs.passed }}
+        SCORE: ${{ steps.poll.outputs.score }}
+        THRESHOLD: ${{ inputs.threshold }}
+      run: |
+        if [ "$PASSED" != "true" ]; then
+          echo "::error::ContextOps evaluation gate FAILED. Score=${SCORE} (threshold=${THRESHOLD}) or a regression was detected."
+          echo "::error::View the full report at ${{ steps.poll.outputs.report_url }}"
+          exit 1
+        fi
+        echo "ContextOps evaluation gate PASSED. Score=${SCORE}"

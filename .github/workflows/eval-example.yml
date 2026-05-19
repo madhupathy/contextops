@@ -1,0 +1,135 @@
+name: Eval Gate Example
+
+# ---------------------------------------------------------------------------
+# This workflow shows how to integrate the ContextOps evaluation gate into a
+# real CI pipeline.  It:
+#   1. Runs your application's tests and integration suite.
+#   2. Submits a trace run to ContextOps (either via the CLI or the REST API).
+#   3. Calls the contextops-gate action to evaluate it and block the merge if
+#      quality scores regress below your chosen threshold.
+# ---------------------------------------------------------------------------
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CONTEXTOPS_API_URL: ${{ vars.CONTEXTOPS_API_URL || 'http://localhost:8080' }}
+
+jobs:
+  # ── 1. Build & unit tests ─────────────────────────────────────────────────
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    outputs:
+      run-id: ${{ steps.submit-trace.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v
+
+      # ── Submit a trace run that captures the integration-test agent call ──
+      - name: Run integration test and capture trace
+        id: submit-trace
+        env:
+          CONTEXTOPS_API_URL: ${{ env.CONTEXTOPS_API_URL }}
+          CONTEXTOPS_API_KEY: ${{ secrets.CONTEXTOPS_API_KEY }}
+        run: |
+          # Example: run a golden-set query through your RAG agent and submit
+          # the resulting trace.  Replace this with your own test harness.
+          RESPONSE=$(curl -sf \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $CONTEXTOPS_API_KEY" \
+            "$CONTEXTOPS_API_URL/api/v1/runs" \
+            -d '{
+              "query": "What is our PTO policy for new hires?",
+              "response": "New hires accrue PTO at 10 days per year during the first two years.",
+              "retrieved_contexts": [
+                "Employee handbook section 4.2: New hires accrue PTO at 10 days/year.",
+                "HR policy update 2024: PTO accrual begins on day one of employment."
+              ],
+              "ground_truth": "New hires accrue 10 days of PTO per year for the first two years.",
+              "model": "gpt-4o",
+              "total_tokens": 512,
+              "latency_ms": 1240,
+              "metadata": {
+                "test_suite": "golden-set",
+                "git_sha": "${{ github.sha }}",
+                "pr_number": "${{ github.event.pull_request.number }}"
+              }
+            }')
+
+          RUN_ID=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+          echo "Submitted trace run: $RUN_ID"
+          echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+  # ── 2. Evaluation gate ────────────────────────────────────────────────────
+  eval-gate:
+    name: Evaluation Gate
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ContextOps evaluation gate
+        id: gate
+        uses: ./.github/actions/contextops-gate
+        with:
+          api-url: ${{ env.CONTEXTOPS_API_URL }}
+          api-key: ${{ secrets.CONTEXTOPS_API_KEY }}
+          run-id: ${{ needs.build.outputs.run-id }}
+          # Evaluate all quality dimensions relevant to a RAG agent
+          categories: 'core_quality,retrieval,memory'
+          # Block the merge if the overall score drops below 0.75
+          threshold: '0.75'
+          # Also block if any individual evaluator regresses vs the last
+          # merged-to-main baseline
+          fail-on-regression: 'true'
+
+      - name: Post gate result to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const score  = '${{ steps.gate.outputs.score }}';
+            const passed = '${{ steps.gate.outputs.passed }}';
+            const url    = '${{ steps.gate.outputs.report-url }}';
+            const icon   = passed === 'true' ? '✅' : '❌';
+            const body   = [
+              `### ${icon} ContextOps Evaluation Gate`,
+              '',
+              `| | |`,
+              `|---|---|`,
+              `| Score | \`${score}\` |`,
+              `| Result | **${passed === 'true' ? 'PASSED' : 'FAILED'}** |`,
+              `| Report | [View full report](${url}) |`,
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+  # ── 3. Deploy (only runs when gate passes on main) ────────────────────────
+  deploy:
+    name: Deploy to Staging
+    needs: [build, eval-gate]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        run: echo "Deploy step — replace with your actual deploy command."

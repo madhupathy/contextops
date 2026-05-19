@@ -1,15 +1,7 @@
-# OpenTelemetry Adapter
+# OpenTelemetry Adapter (stub)
 
-Converts OTEL spans into ContextOps traces.
+> The full implementation lives in [`../opentelemetry/`](../opentelemetry/).
+> See [`../opentelemetry/README.md`](../opentelemetry/README.md) for usage.
 
-## Usage
-
-```bash
-contextops adapter scaffold otel
-```
-
-Generates a Python converter that maps OpenTelemetry span attributes to the ContextOps trace schema.
-
-## Status
-
-Planned for v0.4.
+This directory is kept for backwards compatibility with the CLI scaffold
+command (`contextops adapter scaffold otel`).

@@ -28,6 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
               <NavItem href="/" label="Dashboard" />
               <NavItem href="/runs" label="Runs" />
+              <NavItem href="/compare" label="Compare" />
               <div className="pt-3 pb-1">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-3">Evaluators</p>
               </div>
