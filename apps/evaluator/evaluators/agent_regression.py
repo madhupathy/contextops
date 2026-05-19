@@ -102,11 +102,51 @@ class AgentRegressionEvaluator(BaseEvaluator):
                 continue
             baseline_score = float(baseline_score)
 
-            # For eval score baselines, we check for significant drops
-            # We flag regression if the baseline was passing and the drop is >= threshold
-            # (We can't access current eval scores from within the evaluator — they're computed
-            # in parallel. We use what's available: status, cost, latency.)
-            pass
+            # For eval score baselines, compare against current scores stored in the run's
+            # context_manifest under "current_scores" (injected by the API at evaluation time).
+            # If current_scores are not available, we record the baseline for informational
+            # purposes and flag regressions only when current values are present.
+            current_scores: dict[str, float] = {}
+            if isinstance(context_manifest, dict):
+                current_scores = context_manifest.get("current_scores", {})
+
+            if category in ("latency_ms", "total_tokens", "estimated_cost"):
+                # Handled separately in the performance metrics block below
+                continue
+
+            current_score = current_scores.get(category)
+            if current_score is None:
+                # No current score to compare against; skip
+                continue
+
+            current_score = float(current_score)
+            drop = baseline_score - current_score
+            if drop >= REGRESSION_THRESHOLD:
+                # Determine severity based on category
+                if category in CRITICAL_CATEGORIES:
+                    severity = "critical"
+                elif category in HIGH_CATEGORIES:
+                    severity = "high"
+                elif category in MEDIUM_CATEGORIES:
+                    severity = "medium"
+                else:
+                    severity = "low"
+                regressions.append({
+                    "category": category,
+                    "baseline": round(baseline_score, 4),
+                    "current": round(current_score, 4),
+                    "drop": round(drop, 4),
+                    "severity": severity,
+                    "direction": "degraded",
+                })
+            elif current_score - baseline_score >= REGRESSION_THRESHOLD:
+                improvements.append({
+                    "category": category,
+                    "baseline": round(baseline_score, 4),
+                    "current": round(current_score, 4),
+                    "gain": round(current_score - baseline_score, 4),
+                    "direction": "improved",
+                })
 
         # Check performance metric regressions
         perf_baselines = {
@@ -151,32 +191,49 @@ class AgentRegressionEvaluator(BaseEvaluator):
             baseline_eval_note.append(f"{category}: {score:.2f}")
 
         # Score: 1.0 if no regressions, decreasing per regression
-        critical_regressions = [r for r in regressions if r.get("severity") == "high"]
-        score = 1.0 - len(critical_regressions) * 0.3 - len([r for r in regressions if r.get("severity") == "medium"]) * 0.1
+        critical_regressions = [r for r in regressions if r.get("severity") in ("critical", "high")]
+        score = (
+            1.0
+            - len([r for r in regressions if r.get("severity") == "critical"]) * 0.4
+            - len([r for r in regressions if r.get("severity") == "high"]) * 0.3
+            - len([r for r in regressions if r.get("severity") == "medium"]) * 0.1
+            - len([r for r in regressions if r.get("severity") == "low"]) * 0.05
+        )
         score = max(0.0, min(1.0, score))
         passed = len(critical_regressions) == 0
 
+        eval_regressions = [r for r in regressions if r["category"] not in ("latency_ms", "total_tokens", "estimated_cost")]
+        perf_regressions = [r for r in regressions if r["category"] in ("latency_ms", "total_tokens", "estimated_cost")]
+
         details = {
             "baseline_categories_compared": len(baseline_scores),
-            "performance_regressions": regressions,
-            "performance_improvements": improvements,
+            "regressions": regressions,
+            "eval_regressions": eval_regressions,
+            "performance_regressions": perf_regressions,
+            "improvements": improvements,
             "baseline_eval_scores": baseline_eval_note,
             "metrics_compared": list(perf_baselines.keys()),
             "eval_scores_for_comparison": eval_baselines,
         }
 
         if regressions:
-            reasoning = (
-                f"{len(regressions)} performance regression(s) detected: "
-                + "; ".join(
-                    f"{r['category']} +{r['change']}% vs baseline"
-                    for r in regressions
-                )
-            )
+            reasoning_parts = []
+            for r in regressions:
+                if "drop" in r:
+                    reasoning_parts.append(f"{r['category']} -{r['drop']:.2f} vs baseline ({r['severity']})")
+                else:
+                    reasoning_parts.append(f"{r['category']} +{r['change']}% vs baseline ({r['severity']})")
+            reasoning = f"{len(regressions)} regression(s) detected: " + "; ".join(reasoning_parts)
         elif improvements:
+            improvement_parts = []
+            for i in improvements:
+                if "gain" in i:
+                    improvement_parts.append(f"{i['category']} +{i['gain']:.2f}")
+                else:
+                    improvement_parts.append(f"{i['category']} -{i['change']}%")
             reasoning = (
                 f"No regressions. {len(improvements)} improvement(s): "
-                + "; ".join(f"{i['category']} -{i['change']}%" for i in improvements)
+                + "; ".join(improvement_parts)
             )
         else:
             reasoning = (

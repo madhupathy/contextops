@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -19,11 +20,21 @@ import (
 )
 
 type Handler struct {
-	pool *db.Pool
+	pool         *db.Pool
+	evaluatorURL string
+	httpClient   *http.Client
 }
 
 func New(pool *db.Pool) *Handler {
-	return &Handler{pool: pool}
+	evaluatorURL := os.Getenv("EVALUATOR_URL")
+	if evaluatorURL == "" {
+		evaluatorURL = "http://evaluator:8081"
+	}
+	return &Handler{
+		pool:         pool,
+		evaluatorURL: evaluatorURL,
+		httpClient:   &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
 func (h *Handler) tenantID(c *gin.Context) string {
@@ -707,6 +718,57 @@ func (h *Handler) GetContextManifest(c *gin.Context) {
 }
 
 // ============================================================
+// EVALUATOR DISCOVERY
+// ============================================================
+
+// ListEvaluatorCategories returns all 17 evaluator categories known to the system.
+// If the evaluator service is reachable it proxies the response; otherwise it
+// returns the static list so the UI always works.
+func (h *Handler) ListEvaluatorCategories(c *gin.Context) {
+	// Try to proxy to the evaluator service for a live list
+	evalURL := h.evaluatorURL + "/evaluators"
+	resp, err := h.httpClient.Get(evalURL)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		defer resp.Body.Close()
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr == nil {
+			c.Data(http.StatusOK, "application/json", body)
+			return
+		}
+	}
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+
+	// Fallback: return static list of all 17 evaluators
+	type evalEntry struct {
+		Name     string `json:"name"`
+		Category string `json:"category"`
+		Group    string `json:"group"`
+	}
+	evaluators := []evalEntry{
+		{Name: "answer_correctness", Category: "answer_correctness", Group: "Core Quality"},
+		{Name: "groundedness", Category: "groundedness", Group: "Core Quality"},
+		{Name: "citation_precision", Category: "citation_precision", Group: "Core Quality"},
+		{Name: "task_completion", Category: "task_completion", Group: "Core Quality"},
+		{Name: "response_completeness", Category: "response_completeness", Group: "Core Quality"},
+		{Name: "hallucination_risk", Category: "hallucination_risk", Group: "Core Quality"},
+		{Name: "retrieval_quality", Category: "retrieval_quality", Group: "Retrieval Pipeline"},
+		{Name: "permission_safety", Category: "permission_safety", Group: "Retrieval Pipeline"},
+		{Name: "memory_utility", Category: "memory_utility", Group: "Memory & Context"},
+		{Name: "context_poisoning", Category: "context_poisoning", Group: "Memory & Context"},
+		{Name: "session_coherence", Category: "session_coherence", Group: "Memory & Context"},
+		{Name: "tool_correctness", Category: "tool_correctness", Group: "Agent Behaviour"},
+		{Name: "trajectory_quality", Category: "trajectory_quality", Group: "Agent Behaviour"},
+		{Name: "cost_efficiency", Category: "cost_efficiency", Group: "Cost & Performance"},
+		{Name: "agent_regression", Category: "agent_regression", Group: "Production"},
+		{Name: "plan_adherence", Category: "plan_adherence", Group: "Autonomous"},
+		{Name: "agent_handoff_quality", Category: "agent_handoff_quality", Group: "Autonomous"},
+	}
+	c.JSON(http.StatusOK, gin.H{"evaluators": evaluators, "count": len(evaluators)})
+}
+
+// ============================================================
 // EVALUATIONS
 // ============================================================
 
@@ -738,15 +800,50 @@ func (h *Handler) TriggerEvaluation(c *gin.Context) {
 		return
 	}
 
-	// Queue evaluation job to Python evaluator service
-	// The evaluator service polls for pending runs via its own scheduling loop.
-	// Redis-based job queuing is handled at the infrastructure level (see deploy/k8s).
+	// POST to the evaluator service
+	evalReqBody, err := json.Marshal(map[string]interface{}{
+		"run_id":     runID,
+		"tenant_id":  tenantID,
+		"categories": req.Categories,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to marshal evaluator request")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prepare evaluation request"})
+		return
+	}
+
+	evalURL := h.evaluatorURL + "/evaluate"
+	evalResp, err := h.httpClient.Post(evalURL, "application/json", bytes.NewReader(evalReqBody))
+	if err != nil {
+		// Evaluator service unreachable — log and return accepted so the caller isn't blocked
+		log.Warn().Err(err).Str("url", evalURL).Msg("evaluator service unreachable; evaluation queued for retry")
+		h.audit(c, "trigger_eval", "run", runID, nil)
+		c.JSON(http.StatusAccepted, gin.H{
+			"run_id":     runID,
+			"categories": req.Categories,
+			"status":     "queued",
+			"message":    "Evaluator service unavailable; evaluation will be retried. Results via GET /runs/{id}/evaluations",
+		})
+		return
+	}
+	defer evalResp.Body.Close()
+
+	if evalResp.StatusCode >= 400 {
+		body, _ := io.ReadAll(evalResp.Body)
+		log.Error().Int("status", evalResp.StatusCode).Str("body", string(body)).Msg("evaluator service error")
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":   "evaluator service returned an error",
+			"details": string(body),
+		})
+		return
+	}
+
 	h.audit(c, "trigger_eval", "run", runID, nil)
 	c.JSON(http.StatusAccepted, gin.H{
 		"run_id":     runID,
 		"categories": req.Categories,
-		"status":     "queued",
-		"message":    "Evaluation queued. Results will be available via GET /runs/{id}/evaluations",
+		"status":     "evaluating",
+		"message":    "Evaluation started. Results will be available via GET /runs/{id}/evaluations",
 	})
 }
 
@@ -1427,6 +1524,28 @@ func (h *Handler) fetchRun(ctx context.Context, id, tenantID string) (*model.Run
 		return nil, err
 	}
 	return &r, nil
+}
+
+func (h *Handler) fetchEvaluations(ctx context.Context, runID, tenantID string) ([]model.Evaluation, error) {
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, run_id, tenant_id, evaluator_name, evaluator_version, category,
+		 score, passed, details, reasoning, model_used, eval_tokens, eval_latency_ms, created_at
+		 FROM evaluations WHERE run_id = $1 AND tenant_id = $2 ORDER BY category`, runID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var evals []model.Evaluation
+	for rows.Next() {
+		var ev model.Evaluation
+		if err := rows.Scan(&ev.ID, &ev.RunID, &ev.TenantID, &ev.EvaluatorName, &ev.EvaluatorVersion,
+			&ev.Category, &ev.Score, &ev.Passed, &ev.Details, &ev.Reasoning, &ev.ModelUsed,
+			&ev.EvalTokens, &ev.EvalLatencyMs, &ev.CreatedAt); err == nil {
+			evals = append(evals, ev)
+		}
+	}
+	return evals, nil
 }
 
 func (h *Handler) audit(c *gin.Context, action, resourceType, resourceID string, details json.RawMessage) {

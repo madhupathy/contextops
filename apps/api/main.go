@@ -24,6 +24,7 @@ func main() {
 	port := getEnv("PORT", "8080")
 	dbURL := getEnv("DATABASE_URL", "postgres://contextops:contextops@localhost:5432/contextops?sslmode=disable")
 	redisURL := getEnv("REDIS_URL", "redis://localhost:6379/0")
+	evaluatorURL := getEnv("EVALUATOR_URL", "http://evaluator:8081")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -34,7 +35,8 @@ func main() {
 	}
 	defer pool.Close()
 
-	_ = redisURL // Redis will be used for async eval queue in Phase 2
+	_ = redisURL     // Redis will be used for async eval queue in Phase 2
+	_ = evaluatorURL // consumed by handler.New via os.Getenv; listed here for documentation
 
 	r := setupRouter(pool)
 
@@ -116,6 +118,7 @@ func setupRouter(pool *db.Pool) *gin.Engine {
 		v1.GET("/runs/:id/evaluations", h.GetRunEvaluations)
 		v1.GET("/runs/:id/eval-summary", h.GetRunEvalSummary)
 		v1.GET("/evaluations", h.ListEvaluations)
+		v1.GET("/evaluators", h.ListEvaluatorCategories)
 
 		// Drift monitoring
 		v1.GET("/drift", h.GetAgentDrift)

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import {
   AlertTriangle,
   ArrowLeft,
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -12,6 +13,8 @@ import {
   Cpu,
   DollarSign,
   FileText,
+  GitCompare,
+  ListChecks,
   Lock,
   MemoryStick,
   Shield,
@@ -81,18 +84,23 @@ interface RunTimeline {
 }
 
 const CATEGORY_META: Record<string, { label: string; icon: JSX.Element; group: string }> = {
-  answer_correctness:  { label: "Answer Correctness",  icon: <CheckCircle2 className="w-4 h-4" />, group: "core" },
-  groundedness:        { label: "Groundedness",         icon: <FileText className="w-4 h-4" />,    group: "core" },
-  citation_precision:  { label: "Citation Precision",   icon: <Star className="w-4 h-4" />,        group: "core" },
-  task_completion:     { label: "Task Completion",      icon: <Zap className="w-4 h-4" />,         group: "core" },
-  retrieval_quality:   { label: "Retrieval Quality",    icon: <ChevronRight className="w-4 h-4" />, group: "retrieval" },
-  permission_safety:   { label: "Permission Safety",    icon: <Shield className="w-4 h-4" />,      group: "retrieval" },
-  memory_utility:      { label: "Memory Utility",       icon: <MemoryStick className="w-4 h-4" />, group: "memory" },
-  context_poisoning:   { label: "Context Poisoning",    icon: <AlertTriangle className="w-4 h-4" />, group: "memory" },
-  session_coherence:   { label: "Session Coherence",    icon: <Lock className="w-4 h-4" />,        group: "memory" },
-  tool_correctness:    { label: "Tool Correctness",     icon: <Wrench className="w-4 h-4" />,      group: "agent" },
-  trajectory_quality:  { label: "Trajectory Quality",   icon: <Zap className="w-4 h-4" />,         group: "agent" },
-  cost_efficiency:     { label: "Cost Efficiency",      icon: <DollarSign className="w-4 h-4" />,  group: "cost" },
+  answer_correctness:   { label: "Answer Correctness",   icon: <CheckCircle2 className="w-4 h-4" />,  group: "core" },
+  groundedness:         { label: "Groundedness",          icon: <FileText className="w-4 h-4" />,      group: "core" },
+  citation_precision:   { label: "Citation Precision",    icon: <Star className="w-4 h-4" />,          group: "core" },
+  task_completion:      { label: "Task Completion",       icon: <Zap className="w-4 h-4" />,           group: "core" },
+  response_completeness:{ label: "Response Completeness", icon: <ListChecks className="w-4 h-4" />,    group: "core" },
+  hallucination_risk:   { label: "Hallucination Risk",    icon: <AlertTriangle className="w-4 h-4" />, group: "core" },
+  retrieval_quality:    { label: "Retrieval Quality",     icon: <ChevronRight className="w-4 h-4" />,  group: "retrieval" },
+  permission_safety:    { label: "Permission Safety",     icon: <Shield className="w-4 h-4" />,        group: "retrieval" },
+  memory_utility:       { label: "Memory Utility",        icon: <MemoryStick className="w-4 h-4" />,   group: "memory" },
+  context_poisoning:    { label: "Context Poisoning",     icon: <AlertTriangle className="w-4 h-4" />, group: "memory" },
+  session_coherence:    { label: "Session Coherence",     icon: <Lock className="w-4 h-4" />,          group: "memory" },
+  tool_correctness:     { label: "Tool Correctness",      icon: <Wrench className="w-4 h-4" />,        group: "agent" },
+  trajectory_quality:   { label: "Trajectory Quality",    icon: <Zap className="w-4 h-4" />,           group: "agent" },
+  cost_efficiency:      { label: "Cost Efficiency",       icon: <DollarSign className="w-4 h-4" />,    group: "cost" },
+  agent_regression:     { label: "Agent Regression",      icon: <GitCompare className="w-4 h-4" />,    group: "production" },
+  plan_adherence:       { label: "Plan Adherence",        icon: <Bot className="w-4 h-4" />,           group: "autonomous" },
+  agent_handoff_quality:{ label: "Agent Handoff Quality", icon: <Bot className="w-4 h-4" />,           group: "autonomous" },
 };
 
 const GROUP_LABELS: Record<string, string> = {
@@ -101,6 +109,8 @@ const GROUP_LABELS: Record<string, string> = {
   memory: "Memory & Context",
   agent: "Agent Behaviour",
   cost: "Cost & Performance",
+  production: "Production",
+  autonomous: "Autonomous",
 };
 
 export default function RunDetailPage() {

@@ -5,10 +5,13 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  Bot,
   CheckCircle2,
   Clock,
   Cpu,
   DollarSign,
+  GitCompare,
+  ListChecks,
   MemoryStick,
   Shield,
   Star,
@@ -41,40 +44,51 @@ interface Stats {
   total_cost: number;
 }
 
-const EVAL_GROUPS = [
+interface EvaluatorEntry {
+  name: string;
+  category: string;
+  group?: string;
+  version?: string;
+}
+
+// Static fallback — matches the 17 evaluators registered in the evaluator service.
+// The UI fetches the live list on mount and updates this dynamically.
+const EVAL_GROUPS_STATIC = [
   {
     label: "Core Quality",
     color: "text-green-600",
     items: [
-      { key: "answer_correctness", label: "Answer Correctness", icon: <CheckCircle2 className="w-4 h-4" /> },
-      { key: "groundedness",       label: "Groundedness",        icon: <FileText className="w-4 h-4" /> },
-      { key: "citation_precision", label: "Citation Precision",  icon: <Star className="w-4 h-4" /> },
-      { key: "task_completion",    label: "Task Completion",     icon: <Zap className="w-4 h-4" /> },
+      { key: "answer_correctness",   label: "Answer Correctness",   icon: <CheckCircle2 className="w-4 h-4" /> },
+      { key: "groundedness",         label: "Groundedness",         icon: <FileText className="w-4 h-4" /> },
+      { key: "citation_precision",   label: "Citation Precision",   icon: <Star className="w-4 h-4" /> },
+      { key: "task_completion",      label: "Task Completion",      icon: <Zap className="w-4 h-4" /> },
+      { key: "response_completeness",label: "Response Completeness",icon: <ListChecks className="w-4 h-4" /> },
+      { key: "hallucination_risk",   label: "Hallucination Risk",   icon: <AlertTriangle className="w-4 h-4" /> },
     ],
   },
   {
     label: "Retrieval Pipeline",
     color: "text-blue-600",
     items: [
-      { key: "retrieval_quality", label: "Retrieval Quality",  icon: <BarChart3 className="w-4 h-4" /> },
-      { key: "permission_safety", label: "Permission Safety",  icon: <Shield className="w-4 h-4" /> },
+      { key: "retrieval_quality", label: "Retrieval Quality", icon: <BarChart3 className="w-4 h-4" /> },
+      { key: "permission_safety", label: "Permission Safety", icon: <Shield className="w-4 h-4" /> },
     ],
   },
   {
     label: "Memory & Context",
     color: "text-purple-600",
     items: [
-      { key: "memory_utility",    label: "Memory Utility",     icon: <MemoryStick className="w-4 h-4" /> },
-      { key: "context_poisoning", label: "Context Poisoning",  icon: <AlertTriangle className="w-4 h-4" /> },
-      { key: "session_coherence", label: "Session Coherence",  icon: <Lock className="w-4 h-4" /> },
+      { key: "memory_utility",    label: "Memory Utility",    icon: <MemoryStick className="w-4 h-4" /> },
+      { key: "context_poisoning", label: "Context Poisoning", icon: <AlertTriangle className="w-4 h-4" /> },
+      { key: "session_coherence", label: "Session Coherence", icon: <Lock className="w-4 h-4" /> },
     ],
   },
   {
     label: "Agent Behaviour",
     color: "text-indigo-600",
     items: [
-      { key: "tool_correctness",  label: "Tool Correctness",   icon: <Wrench className="w-4 h-4" /> },
-      { key: "trajectory_quality",label: "Trajectory Quality", icon: <Activity className="w-4 h-4" /> },
+      { key: "tool_correctness",   label: "Tool Correctness",   icon: <Wrench className="w-4 h-4" /> },
+      { key: "trajectory_quality", label: "Trajectory Quality", icon: <Activity className="w-4 h-4" /> },
     ],
   },
   {
@@ -84,7 +98,25 @@ const EVAL_GROUPS = [
       { key: "cost_efficiency", label: "Cost Efficiency", icon: <DollarSign className="w-4 h-4" /> },
     ],
   },
+  {
+    label: "Production",
+    color: "text-orange-600",
+    items: [
+      { key: "agent_regression", label: "Agent Regression", icon: <GitCompare className="w-4 h-4" /> },
+    ],
+  },
+  {
+    label: "Autonomous",
+    color: "text-rose-600",
+    items: [
+      { key: "plan_adherence",        label: "Plan Adherence",        icon: <Bot className="w-4 h-4" /> },
+      { key: "agent_handoff_quality", label: "Agent Handoff Quality", icon: <Bot className="w-4 h-4" /> },
+    ],
+  },
 ];
+
+// Build a flat count from the static groups
+const STATIC_EVALUATOR_COUNT = EVAL_GROUPS_STATIC.reduce((sum, g) => sum + g.items.length, 0);
 
 export default function Dashboard() {
   const [runs, setRuns] = useState<Run[]>([]);
@@ -93,6 +125,19 @@ export default function Dashboard() {
     avg_latency: 0, avg_tokens: 0, total_cost: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [evaluatorCount, setEvaluatorCount] = useState<number>(STATIC_EVALUATOR_COUNT);
+
+  useEffect(() => {
+    // Fetch live evaluator list to show accurate count
+    fetch(`${API_URL}/api/v1/evaluators`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: { evaluators: EvaluatorEntry[]; count: number } | null) => {
+        if (data && typeof data.count === "number") {
+          setEvaluatorCount(data.count);
+        }
+      })
+      .catch(() => { /* keep static count */ });
+  }, []);
 
   useEffect(() => {
     fetch(`${API_URL}/api/v1/runs`)
@@ -149,10 +194,10 @@ export default function Dashboard() {
       {/* Evaluator grid */}
       <div className="card p-6">
         <h2 className="text-base font-semibold text-slate-900 mb-4">
-          12 Evaluators — Full AI Agent Quality Stack
+          {evaluatorCount} Evaluators — Full AI Agent Quality Stack
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          {EVAL_GROUPS.map((group) => (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+          {EVAL_GROUPS_STATIC.map((group) => (
             <div key={group.label}>
               <p className={`text-xs font-semibold uppercase tracking-wider mb-2 ${group.color}`}>
                 {group.label}
