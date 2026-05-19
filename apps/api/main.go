@@ -121,7 +121,8 @@ func setupRouter(pool *db.Pool) *gin.Engine {
 		v1.GET("/evaluators", h.ListEvaluatorCategories)
 
 		// Drift monitoring
-		v1.GET("/drift", h.GetAgentDrift)
+		v1.GET("/drift", h.GetDriftTimeSeries) // time-series: { series, alerts }
+		v1.GET("/drift/window", h.GetAgentDrift) // legacy single-window comparison
 
 		// Benchmarks
 		v1.POST("/benchmarks", h.CreateBenchmarkSuite)

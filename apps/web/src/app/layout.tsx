@@ -29,6 +29,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavItem href="/" label="Dashboard" />
               <NavItem href="/runs" label="Runs" />
               <NavItem href="/compare" label="Compare" />
+              <NavItem href="/annotate" label="Annotate" />
+              <NavItem href="/drift" label="Drift" />
               <div className="pt-3 pb-1">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-3">Evaluators</p>
               </div>

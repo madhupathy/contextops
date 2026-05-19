@@ -1650,15 +1650,39 @@ func scoreToGrade(score float64) string {
 }
 
 // ============================================================
-// ANNOTATION QUEUE — human review of borderline runs
-// Enables auto-curation of golden datasets from production traffic
+// ANNOTATION QUEUE — human review of runs
+// Enables curating golden datasets and regression baselines from
+// production traffic.
+//
+// Request body (POST /api/v1/runs/:id/annotate):
+//
+//	{
+//	  "rating":          4,           // 1–5; required
+//	  "note":            "...",       // optional free-text note / correction
+//	  "is_ground_truth": false,       // flag this run as a baseline for regression
+//
+//	  // Legacy fields — still accepted for backward compatibility
+//	  "annotation":        "correct", // correct|incorrect|ambiguous|needs_review
+//	  "correct_answer":    "...",
+//	  "add_to_dataset_id": "..."
+//	}
+//
+// Annotation is stored inside the existing context_manifest JSONB column
+// so no DDL change is required.  The web UI reads it back via
+// GET /api/v1/runs/:id/timeline which returns the full run JSON.
 // ============================================================
 
 type AnnotateRunRequest struct {
-	Annotation   string          `json:"annotation" binding:"required"` // correct|incorrect|ambiguous
-	Comment      string          `json:"comment"`
-	CorrectAnswer *string        `json:"correct_answer"`
-	AddToDataset  *string        `json:"add_to_dataset_id"`
+	// New fields (preferred)
+	Rating        *int    `json:"rating"`          // 1–5
+	Note          string  `json:"note"`            // free-text note / correction
+	IsGroundTruth bool    `json:"is_ground_truth"` // mark as regression baseline
+	AnnotatedBy   string  `json:"annotated_by"`    // optional user identifier
+
+	// Legacy fields (still accepted)
+	Annotation    string  `json:"annotation"`         // correct|incorrect|ambiguous|needs_review
+	CorrectAnswer *string `json:"correct_answer"`
+	AddToDataset  *string `json:"add_to_dataset_id"`
 }
 
 func (h *Handler) AnnotateRun(c *gin.Context) {
@@ -1671,13 +1695,24 @@ func (h *Handler) AnnotateRun(c *gin.Context) {
 		return
 	}
 
-	validAnnotations := map[string]bool{"correct": true, "incorrect": true, "ambiguous": true, "needs_review": true}
-	if !validAnnotations[req.Annotation] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "annotation must be: correct, incorrect, ambiguous, or needs_review"})
+	// Validate: at least a rating or an annotation label must be supplied
+	if req.Rating == nil && req.Annotation == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provide at least one of: rating (1-5) or annotation (correct|incorrect|ambiguous|needs_review)"})
 		return
 	}
+	if req.Rating != nil && (*req.Rating < 1 || *req.Rating > 5) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "rating must be between 1 and 5"})
+		return
+	}
+	if req.Annotation != "" {
+		validLabels := map[string]bool{"correct": true, "incorrect": true, "ambiguous": true, "needs_review": true}
+		if !validLabels[req.Annotation] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "annotation must be: correct, incorrect, ambiguous, or needs_review"})
+			return
+		}
+	}
 
-	// Verify run exists
+	// Verify run exists and belongs to tenant
 	var exists bool
 	_ = h.pool.QueryRow(c.Request.Context(),
 		`SELECT EXISTS(SELECT 1 FROM runs WHERE id = $1 AND tenant_id = $2)`, runID, tenantID,
@@ -1687,17 +1722,33 @@ func (h *Handler) AnnotateRun(c *gin.Context) {
 		return
 	}
 
-	// Store annotation in context_manifest (extends existing JSONB column, no schema change needed)
-	annotation := map[string]interface{}{
-		"annotation":    req.Annotation,
-		"comment":       req.Comment,
-		"annotated_at":  time.Now().UTC().Format(time.RFC3339),
+	now := time.Now().UTC()
+
+	// Build the annotation object stored in context_manifest
+	annotationData := map[string]interface{}{
+		"annotated_at":    now.Format(time.RFC3339),
+		"is_ground_truth": req.IsGroundTruth,
+	}
+	if req.Rating != nil {
+		annotationData["rating"] = *req.Rating
+	}
+	if req.Note != "" {
+		annotationData["note"] = req.Note
+	}
+	if req.AnnotatedBy != "" {
+		annotationData["annotated_by"] = req.AnnotatedBy
+	}
+	// Preserve legacy fields when supplied
+	if req.Annotation != "" {
+		annotationData["annotation"] = req.Annotation
 	}
 	if req.CorrectAnswer != nil {
-		annotation["correct_answer"] = *req.CorrectAnswer
+		annotationData["correct_answer"] = *req.CorrectAnswer
 	}
 
-	annotationJSON, _ := json.Marshal(annotation)
+	annotationJSON, _ := json.Marshal(annotationData)
+
+	// Persist into the context_manifest JSONB column (no schema migration needed)
 	_, err := h.pool.Exec(c.Request.Context(),
 		`UPDATE runs
 		 SET context_manifest = context_manifest || jsonb_build_object('annotation', $1::jsonb)
@@ -1710,17 +1761,12 @@ func (h *Handler) AnnotateRun(c *gin.Context) {
 		return
 	}
 
-	// If requested, add to a dataset
+	// Optional: add run to a dataset (legacy feature, still supported)
 	if req.AddToDataset != nil && *req.AddToDataset != "" {
-		// Fetch run for dataset case creation
-		var query, finalAnswer, expectedAnswer string
-		var totalTokens int
-		var estimatedCost float64
+		var query, finalAnswer string
 		h.pool.QueryRow(c.Request.Context(),
-			`SELECT query, COALESCE(final_answer, ''), COALESCE(expected_answer, ''),
-			        total_tokens, estimated_cost
-			 FROM runs WHERE id = $1`, runID,
-		).Scan(&query, &finalAnswer, &expectedAnswer, &totalTokens, &estimatedCost)
+			`SELECT query, COALESCE(final_answer, '') FROM runs WHERE id = $1`, runID,
+		).Scan(&query, &finalAnswer)
 
 		correctAnswer := finalAnswer
 		if req.CorrectAnswer != nil {
@@ -1735,10 +1781,8 @@ func (h *Handler) AnnotateRun(c *gin.Context) {
 			caseID, *req.AddToDataset,
 			fmt.Sprintf("from-run-%s", runID[:8]),
 			query, correctAnswer,
-			annotationJSON, time.Now(),
+			annotationJSON, now,
 		)
-
-		// Update dataset case count
 		_, _ = h.pool.Exec(c.Request.Context(),
 			`UPDATE datasets SET case_count = case_count + 1 WHERE id = $1`,
 			*req.AddToDataset,
@@ -1747,10 +1791,139 @@ func (h *Handler) AnnotateRun(c *gin.Context) {
 
 	h.audit(c, "annotate", "run", runID, annotationJSON)
 	c.JSON(http.StatusOK, gin.H{
-		"run_id":     runID,
-		"annotation": req.Annotation,
-		"added_to_dataset": req.AddToDataset,
-		"message":    "Annotation saved",
+		"run_id":          runID,
+		"rating":          req.Rating,
+		"note":            req.Note,
+		"is_ground_truth": req.IsGroundTruth,
+		"annotation":      req.Annotation,
+		"annotated_at":    now.Format(time.RFC3339),
+		"message":         "Annotation saved",
+	})
+}
+
+// ============================================================
+// DRIFT TIME-SERIES — GET /api/v1/drift
+// Returns per-day average evaluation scores for a project and
+// generates alerts when any metric has drifted > 10% from its
+// baseline (first-N-days average in the window).
+// ============================================================
+
+func (h *Handler) GetDriftTimeSeries(c *gin.Context) {
+	tenantID := h.tenantID(c)
+	projectID := c.Query("project")  // optional agent / project filter
+	daysStr := c.Query("days")
+	days := 30
+	if daysStr != "" {
+		if n, err := fmt.Sscanf(daysStr, "%d", &days); n != 1 || err != nil || days < 1 {
+			days = 30
+		}
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	ctx := c.Request.Context()
+
+	// Query: average score per evaluator per day
+	baselineClause := ""
+	args := []interface{}{tenantID, days}
+	if projectID != "" {
+		args = append(args, projectID)
+		baselineClause = fmt.Sprintf(" AND r.agent_id = $%d", len(args))
+	}
+
+	seriesQuery := fmt.Sprintf(`
+		SELECT
+			DATE_TRUNC('day', r.created_at)::date AS day,
+			e.category AS evaluator,
+			ROUND(AVG(e.score)::numeric, 4)::float8 AS avg_score
+		FROM evaluations e
+		JOIN runs r ON r.id = e.run_id
+		WHERE e.tenant_id = $1
+		  AND r.created_at >= NOW() - ($2 || ' days')::interval
+		  %s
+		GROUP BY 1, 2
+		ORDER BY 1, 2`, baselineClause)
+
+	type seriesRow struct {
+		Day      string
+		Evaluator string
+		Score    float64
+	}
+
+	rows, err := h.pool.Query(ctx, seriesQuery, args...)
+	var seriesRows []seriesRow
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var r seriesRow
+			if scanErr := rows.Scan(&r.Day, &r.Evaluator, &r.Score); scanErr == nil {
+				seriesRows = append(seriesRows, r)
+			}
+		}
+	}
+
+	type SeriesPoint struct {
+		Date      string  `json:"date"`
+		Evaluator string  `json:"evaluator"`
+		Score     float64 `json:"score"`
+	}
+	type Alert struct {
+		Evaluator string  `json:"evaluator"`
+		Current   float64 `json:"current"`
+		Baseline  float64 `json:"baseline"`
+		Delta     float64 `json:"delta"`
+	}
+
+	var series []SeriesPoint
+	for _, r := range seriesRows {
+		series = append(series, SeriesPoint{
+			Date:      r.Day,
+			Evaluator: r.Evaluator,
+			Score:     r.Score,
+		})
+	}
+	if series == nil {
+		series = []SeriesPoint{}
+	}
+
+	// Compute alerts: compare last-3-day average to first-3-day average per evaluator
+	byEval := map[string][]SeriesPoint{}
+	for _, p := range series {
+		byEval[p.Evaluator] = append(byEval[p.Evaluator], p)
+	}
+	var alerts []Alert
+	for ev, pts := range byEval {
+		if len(pts) < 6 {
+			continue
+		}
+		baseline := 0.0
+		for _, p := range pts[:3] {
+			baseline += p.Score
+		}
+		baseline /= 3
+		current := 0.0
+		for _, p := range pts[len(pts)-3:] {
+			current += p.Score
+		}
+		current /= 3
+		delta := current - baseline
+		if delta < -0.10 {
+			alerts = append(alerts, Alert{
+				Evaluator: ev,
+				Current:   math.Round(current*1000) / 1000,
+				Baseline:  math.Round(baseline*1000) / 1000,
+				Delta:     math.Round(delta*1000) / 1000,
+			})
+		}
+	}
+	if alerts == nil {
+		alerts = []Alert{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"series": series,
+		"alerts": alerts,
 	})
 }
 

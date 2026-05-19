@@ -36,29 +36,41 @@ ContextOps evaluates the pipeline, not just the output.
 
 ---
 
-## What ContextOps Evaluates
+## Architecture
 
 ```
-User query
-    │
-    ▼
-Retrieval candidates ←── Was the right document retrieved?
-    │                     Were better-scoring docs rejected by ACL?
-    │                     Did ranking put lower-quality docs first?
-    ▼
-Memory injection ←──────  Was this memory stale?
-    │                     Is it contradicting current retrieved evidence?
-    │                     Was a useful preference ignored?
-    ▼
-Context assembly ←──────  Did a stale value from memory contaminate the answer?
-    │                     Is early-turn context poisoning late-turn reasoning?
-    ▼
-Tool calls ←────────────  Wrong tool selected? Wrong arguments?
-    │                     Action intent but tool not called?
-    ▼
-Final answer ←──────────  Is every claim grounded in retrieved evidence?
-                          Did any ACL-blocked document get cited?
-                          Did the agent actually complete the task?
+┌─────────────────────────────────────────────────────────────────┐
+│                         ContextOps                              │
+│                                                                  │
+│  ┌──────────┐   ┌──────────────┐   ┌──────────────────────────┐ │
+│  │  CLI     │   │  Web UI      │   │  REST API (Go / Gin)     │ │
+│  │  (Go)    │   │  (Next.js)   │   │  Multi-tenant · Audit    │ │
+│  │          │   │  localhost:  │   │  localhost:8080           │ │
+│  │  trace   │   │  3000        │   │                          │ │
+│  │  eval    │   │              │   │  /api/v1/runs            │ │
+│  │  gate    │   │  Dashboard   │   │  /api/v1/evaluations     │ │
+│  │  compare │   │  Runs        │   │  /api/v1/drift           │ │
+│  │  report  │   │  Compare     │   │  /api/v1/benchmarks      │ │
+│  └──────────┘   │  Annotate    │   │  /api/v1/traces          │ │
+│                 │  Drift       │   └──────────┬───────────────┘ │
+│                 └──────────────┘              │                  │
+│                                               ▼                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │              Evaluator Service (Python / FastAPI)          │ │
+│  │              17 async evaluators · localhost:8081          │ │
+│  │                                                            │ │
+│  │  Core Quality    Retrieval      Memory & Context           │ │
+│  │  Agent Behaviour Cost/Perf      Production · Autonomous    │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                               │                                  │
+│                               ▼                                  │
+│  ┌──────────────┐   ┌─────────────────┐   ┌───────────────────┐ │
+│  │  PostgreSQL  │   │  Redis          │   │  Adapters         │ │
+│  │  (runs,      │   │  (async eval    │   │  LangChain        │ │
+│  │  evals,      │   │  queue)         │   │  OpenAI Agents    │ │
+│  │  benchmarks) │   └─────────────────┘   │  OpenTelemetry    │ │
+│  └──────────────┘                         └───────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -75,8 +87,10 @@ docker compose up -d
 
 # API:       http://localhost:8080
 # Evaluator: http://localhost:8081
-# UI:        http://localhost:3000
+# Web UI:    http://localhost:3000
 ```
+
+Open `http://localhost:3000` in your browser to see the Dashboard, Runs, Compare, Annotate, and Drift pages.
 
 ### CLI
 
@@ -88,8 +102,6 @@ contextops trace ingest ./examples/traces/pto-policy-failure.json
 contextops eval run <run-id>
 contextops gate check --config .contextops/gates.yaml
 ```
-
----
 
 ---
 
@@ -126,6 +138,63 @@ contextops eval run YOUR_RUN_ID
 | **LangChain / LangGraph callback** ([guide](docs/integration/README.md#pattern-b--langchain--langgraph-callback)) | Drop a callback handler into your existing chain — no changes to chain code |
 | **OpenAI Agents SDK** ([guide](docs/integration/README.md#pattern-c--openai-agents-sdk)) | Wrap your agent run with a context manager |
 | **Absolute minimum** ([guide](docs/integration/README.md#pattern-d--absolute-minimum-any-framework)) | Just query + answer + tokens — enables 5 evaluators with two fields |
+
+### OpenTelemetry adapter
+
+Emit ContextOps traces directly from your existing OTel instrumentation:
+
+```python
+from contextops.adapters.otel import ContextOpsSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+provider = TracerProvider()
+provider.add_span_processor(
+    BatchSpanProcessor(
+        ContextOpsSpanExporter(endpoint="http://localhost:8080/api/v1/traces")
+    )
+)
+
+# Your existing OTel-instrumented code now sends traces to ContextOps automatically
+```
+
+### GitHub Action
+
+Block CI/CD on quality regressions:
+
+```yaml
+# .github/workflows/eval.yml
+name: ContextOps Evaluation Gate
+
+on: [push, pull_request]
+
+jobs:
+  eval-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run evaluation gate
+        uses: ./.github/actions/contextops-gate
+        with:
+          api_url: ${{ secrets.CONTEXTOPS_API_URL }}
+          config: .contextops/gates.yaml
+          fail_on_regression: true
+```
+
+```yaml
+# .contextops/gates.yaml
+minimum_scores:
+  answer_correctness: 0.90
+  groundedness: 0.85
+  retrieval_quality: 0.80
+  permission_safety: 1.00   # zero tolerance
+  task_completion: 0.85
+
+maximum_thresholds:
+  latency_ms_p95: 5000
+  cost_per_run_usd: 0.10
+```
 
 ### What to add to unlock each evaluator
 
@@ -199,7 +268,7 @@ cost_efficiency      0.82  PASS  Latency and token spend within bounds
 
 ---
 
-## 15 Evaluators
+## 17 Evaluators
 
 ### Core Quality
 
@@ -209,6 +278,8 @@ cost_efficiency      0.82  PASS  Latency and token spend within bounds
 | `groundedness` | Is every claim in the answer supported by retrieved evidence? Detects hallucinations |
 | `citation_precision` | Are citations real, selected, and actually relevant? Catches hallucinated doc IDs |
 | `task_completion` | Did the agent *complete* the task — or just describe it? Distinguishes execution from deflection |
+| `response_completeness` | Were ALL sub-questions in a multi-part query answered? Penalizes partial answers |
+| `hallucination_risk` | Detects high-risk claim patterns — statistics, URLs, quotes not grounded in evidence |
 
 ### Retrieval Pipeline
 
@@ -237,9 +308,79 @@ cost_efficiency      0.82  PASS  Latency and token spend within bounds
 | Evaluator | What it measures |
 |-----------|-----------------|
 | `cost_efficiency` | Token spend, latency, and cost within configured thresholds |
-| `hallucination_risk` | Detects high-risk claim patterns — statistics, URLs, quotes not grounded in evidence |
-| `response_completeness` | Were ALL sub-questions in a multi-part query answered? |
 | `agent_regression` | Did quality degrade vs a recorded baseline run? |
+
+### Autonomous Agent
+
+| Evaluator | What it measures |
+|-----------|-----------------|
+| `plan_adherence` | Did a multi-step agent follow its declared plan? Detects deviation and improvisation |
+| `agent_handoff_quality` | In multi-agent pipelines, was context preserved and handoff intent clear? |
+
+---
+
+## Web UI
+
+Open `http://localhost:3000` after `docker compose up -d`.
+
+### Dashboard
+
+Overview of all runs — total, completed, failed, average latency, token spend, and total cost. The full 17-evaluator grid shows which categories are active.
+
+### Runs
+
+Table view of all ingested runs with status, eval grade (A–F), token count, latency, and cost. Supports text and status filters.
+
+### Compare
+
+Select any two runs in the Runs page and click **Compare selected** to see a side-by-side evaluator score table with per-metric deltas highlighted green (improvement) or red (regression).
+
+```
+http://localhost:3000/compare?a=<run-id-a>&b=<run-id-b>
+```
+
+### Annotate
+
+Human labeling queue for teams that want manual oversight of borderline runs.
+
+- Shows a queue of completed runs with the question, agent answer, and retrieved context
+- Annotators rate quality with thumbs up/down or 1–5 stars, add a correction note, and optionally flag a run as **ground truth** to use as a regression baseline
+- Progress bar shows X of Y annotated
+- Keyboard shortcuts: **J/K** navigate, **Y/N** thumbs up/down, **S** skip
+
+Annotations are saved via `POST /api/v1/runs/{id}/annotate`:
+
+```json
+{
+  "rating": 4,
+  "note": "The answer is correct but misses the edge case about carry-over.",
+  "is_ground_truth": false
+}
+```
+
+### Drift Monitoring
+
+Time-series view showing how evaluator scores trend over time.
+
+- SVG line chart (no external dependencies) showing score trends per evaluator
+- Time range selector: **7 days / 30 days / 90 days**
+- Alert badges when a score has drifted more than 10% within the window
+- "Drift detected" banner if any metric crossed the regression threshold in the last 24 h
+- Table showing evaluator | current score | 7-day avg | trend | status
+
+Powered by `GET /api/v1/drift?days=30&project=<agent-id>`:
+
+```json
+{
+  "series": [
+    {"date": "2026-05-12", "evaluator": "answer_correctness", "score": 0.84},
+    {"date": "2026-05-13", "evaluator": "answer_correctness", "score": 0.81}
+  ],
+  "alerts": [
+    {"evaluator": "retrieval_quality", "current": 0.71, "baseline": 0.83, "delta": -0.12}
+  ]
+}
+```
 
 ---
 
@@ -267,7 +408,7 @@ POST /evaluate/profile?run_id=X&profile=enterprise
 # → permission_safety, citation_precision, groundedness,
 #   answer_correctness, context_poisoning, session_coherence
 
-# Everything
+# Everything (all 17 evaluators)
 POST /evaluate/profile?run_id=X&profile=full
 ```
 
@@ -331,9 +472,89 @@ contextops compare benchmark enterprise-search --baseline v0.1 --candidate v0.2
 | Session coherence | ❌ | ❌ | ❌ | ✅ |
 | Citation accuracy (not just existence) | ❌ | Partial | ❌ | ✅ |
 | Task completion vs deflection | ❌ | ❌ | ❌ | ✅ |
+| Autonomous agent evaluation | ❌ | ❌ | ❌ | ✅ |
+| Human annotation queue | ❌ | ❌ | ❌ | ✅ |
+| Drift monitoring dashboard | Partial | ❌ | Partial | ✅ |
+| Run comparison (side-by-side) | Partial | ❌ | Partial | ✅ |
 | CI gate blocking | ❌ | ❌ | ❌ | ✅ |
 | Evaluation profiles | ❌ | ❌ | ❌ | ✅ |
+| OpenTelemetry adapter | ❌ | ❌ | ✅ | ✅ |
 | Self-hosted / open source | ❌ | ✅ | ✅ | ✅ |
+
+---
+
+## API Reference
+
+### Core run flow
+
+```
+POST /api/v1/runs                     Ingest a trace (run + retrieval + memory + tools)
+GET  /api/v1/runs                     List runs (filter: ?status=, ?agent_id=)
+GET  /api/v1/runs/:id                 Get a single run
+GET  /api/v1/runs/:id/timeline        Full debug view: run + all sub-tables + evaluations
+POST /api/v1/runs/:id/evaluate        Trigger evaluation (all 17 evaluators or specific set)
+GET  /api/v1/runs/:id/eval-summary    Grade (A–F), avg score, critical failure highlights
+GET  /api/v1/runs/:id/evaluations     Per-evaluator scores, reasoning, and details
+POST /api/v1/runs/:id/annotate        Save human annotation (rating, note, is_ground_truth)
+```
+
+### Evaluators and drift
+
+```
+GET  /api/v1/evaluators               List all 17 registered evaluators
+GET  /api/v1/evaluations              List evaluations (filter: ?category=)
+GET  /api/v1/drift                    Time-series scores per evaluator + alerts (drift > 10%)
+GET  /api/v1/drift/window             Single-window comparison (legacy)
+```
+
+### Comparison
+
+```
+POST /api/v1/compare                  Compare two runs — returns delta summary
+GET  /compare?a=<id>&b=<id>          Web UI side-by-side comparison view
+```
+
+### Benchmarks and datasets
+
+```
+POST /api/v1/benchmarks               Create a benchmark suite
+POST /api/v1/benchmarks/:id/run       Run a suite against your agent
+GET  /api/v1/benchmarks/:id/results   Aggregate results with regression detection
+POST /api/v1/datasets                 Create a dataset
+POST /api/v1/traces                   Ingest canonical (nested) trace format
+```
+
+---
+
+## Project Structure
+
+```
+contextops/
+├── apps/
+│   ├── api/              # Go REST API (Gin, multi-tenant, JWT, audit log)
+│   │   └── internal/
+│   │       ├── handler/  # All HTTP handlers including annotate + drift
+│   │       ├── db/       # pgx connection pool
+│   │       └── model/    # Shared Go structs
+│   ├── cli/              # Go CLI (init, trace, eval, benchmark, gate, compare, report)
+│   ├── evaluator/        # Python evaluation engine (FastAPI, 17 async evaluators)
+│   └── web/              # Next.js 14 web UI
+│       └── src/app/
+│           ├── page.tsx          # Dashboard
+│           ├── runs/             # Run list + detail
+│           ├── compare/          # Side-by-side run comparison
+│           ├── annotate/         # Human annotation queue
+│           └── drift/            # Drift monitoring dashboard
+├── packages/
+│   ├── trace-schema/     # JSON Schema for the run trace format
+│   ├── evaluator-core/   # Shared evaluator interfaces
+│   ├── context-manifest/ # Context assembly spec
+│   ├── benchmark-core/   # Dataset runners and scoring
+│   └── policy-core/      # ACL / permission check utilities
+├── adapters/             # REST, LangGraph, OpenAI Agents SDK, OpenTelemetry
+├── benchmarks/           # Enterprise search, memory, memory-poisoning, workflow, doc copilot
+└── deploy/               # Docker Compose, Kubernetes / Helm charts
+```
 
 ---
 
@@ -349,63 +570,10 @@ cp .env.example .env
 | `DATABASE_URL` | Yes | Full connection string for the API service |
 | `REDIS_URL` | Yes | Redis connection string |
 | `OPENAI_API_KEY` | Optional | Enables LLM-as-judge for `answer_correctness` and `groundedness`; falls back to heuristics if unset |
-| `NEXT_PUBLIC_API_URL` | Yes | API base URL for the web UI |
+| `NEXT_PUBLIC_API_URL` | Yes | API base URL for the web UI (e.g. `http://localhost:8080`) |
 | `CONTEXTOPS_API_URL` | Yes | API base URL for the CLI |
 
 > **Never commit `.env`** — it is gitignored.
-
----
-
-## API Reference
-
-### Core run flow
-
-```
-POST /api/v1/runs                     Ingest a trace (run + retrieval + memory + tools)
-GET  /api/v1/runs/:id/timeline        Full debug view: run + all sub-tables + evaluations
-POST /api/v1/runs/:id/evaluate        Trigger evaluation (all 12 evaluators or specific set)
-GET  /api/v1/runs/:id/eval-summary    Grade (A–F), avg score, critical failure highlights
-GET  /api/v1/runs/:id/evaluations     Per-evaluator scores, reasoning, and details
-```
-
-### Evaluation profiles
-
-```
-POST /evaluate/profile?run_id=X&profile=rag|agent|memory|enterprise|full
-GET  /evaluators/profiles             List all profiles with their category sets
-GET  /evaluators                      List all 12 registered evaluators
-```
-
-### Benchmarks & datasets
-
-```
-POST /api/v1/benchmarks               Create a benchmark suite
-POST /api/v1/benchmarks/:id/run       Run a suite against your agent
-GET  /api/v1/benchmarks/:id/results   Aggregate results with regression detection
-POST /api/v1/compare                  Compare two runs side by side
-```
-
----
-
-## Project Structure
-
-```
-contextops/
-├── apps/
-│   ├── api/              # Go REST API (Gin, multi-tenant, JWT, audit log)
-│   ├── cli/              # Go CLI (init, trace, eval, benchmark, gate, compare, report)
-│   ├── evaluator/        # Python evaluation engine (FastAPI, 12 async evaluators)
-│   └── web/              # Next.js 14 debugger UI with run timeline, eval groups, trace view
-├── packages/
-│   ├── trace-schema/     # JSON Schema for the run trace format
-│   ├── evaluator-core/   # Shared evaluator interfaces
-│   ├── context-manifest/ # Context assembly spec
-│   ├── benchmark-core/   # Dataset runners and scoring
-│   └── policy-core/      # ACL / permission check utilities
-├── adapters/             # REST, LangGraph, OpenAI Agents SDK, OpenTelemetry
-├── benchmarks/           # Enterprise search, memory, memory-poisoning, workflow, doc copilot
-└── deploy/               # Docker Compose, Kubernetes / Helm charts
-```
 
 ---
 
